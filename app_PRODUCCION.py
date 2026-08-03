@@ -133,15 +133,26 @@ class Pedido(db.Model):
         lazy=True,
         cascade='all, delete-orphan'
     )
+    balones = db.relationship(
+        'PedidoBalon',
+        backref='pedido',
+        lazy=True,
+        cascade='all, delete-orphan'
+    )
 
     def to_dict(self):
         return {
             'id': self.id,
             'numero_pedido': self.numero_pedido,
             'cliente': self.cliente,
+            # Se mantienen por compatibilidad con pantallas antiguas: reflejan
+            # el primer tipo de balón y el TOTAL de balones del pedido.
+            # La fuente de verdad para "varios tipos en un mismo pedido" es
+            # la lista 'balones' de abajo.
             'tipo_balon_id': self.tipo_balon_id,
             'tipo_balon_nombre': self.tipo_balon.nombre if self.tipo_balon else None,
             'cantidad_balones': self.cantidad_balones,
+            'balones': [b.to_dict() for b in self.balones],
             'fecha_creacion': self.fecha_creacion.isoformat(),
             'fecha_entrega_solicitada': (
                 self.fecha_entrega_solicitada.isoformat()
@@ -150,6 +161,31 @@ class Pedido(db.Model):
             'estado': self.estado,
             'observaciones': self.observaciones,
             'materiales': [m.to_dict() for m in self.materiales]
+        }
+
+
+class PedidoBalon(db.Model):
+    """
+    Un pedido puede incluir varios tipos de balón (mismo cliente, mismo
+    número de pedido). Cada fila aquí es "este pedido lleva X balones
+    del tipo Y".
+    """
+    __tablename__ = 'pedido_balon'
+
+    id = db.Column(db.Integer, primary_key=True)
+    pedido_id = db.Column(db.Integer, db.ForeignKey('pedido.id'), nullable=False)
+    tipo_balon_id = db.Column(db.Integer, db.ForeignKey('tipo_balon.id'), nullable=False)
+    cantidad = db.Column(db.Float, nullable=False, default=0)
+
+    tipo_balon = db.relationship('TipoBalon')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'pedido_id': self.pedido_id,
+            'tipo_balon_id': self.tipo_balon_id,
+            'tipo_balon_nombre': self.tipo_balon.nombre if self.tipo_balon else None,
+            'cantidad': self.cantidad
         }
 
 
@@ -571,14 +607,27 @@ def pedidos_route():
 
         # Aceptar tanto formato 'items' (frontend original) como 'materiales'
         items = data.get('items', [])
-        tipo_balon_id = data.get('tipo_balon_id') or (items[0].get('tipo_balon_id') if items else None)
-        cantidad_balones = data.get('cantidad_balones') or (items[0].get('cantidad', 1) if items else 0)
+        # Compatibilidad hacia atrás: si alguien manda tipo_balon_id suelto
+        # (sin 'items'), se trata como un único ítem.
+        if not items and data.get('tipo_balon_id'):
+            items = [{
+                'tipo_balon_id': data.get('tipo_balon_id'),
+                'cantidad': data.get('cantidad_balones', 1)
+            }]
+
+        # 'tipo_balon_id'/'cantidad_balones' en Pedido se mantienen solo como
+        # resumen (primer tipo pedido y total de balones del pedido); el
+        # detalle real por tipo de balón vive en la tabla PedidoBalon.
+        primer_tipo_balon_id = items[0].get('tipo_balon_id') if items else None
+        cantidad_balones_total = sum(
+            float(it.get('cantidad', 0)) for it in items if it.get('tipo_balon_id')
+        )
 
         nuevo_pedido = Pedido(
             numero_pedido=generar_numero_pedido(),
             cliente=data.get('cliente'),
-            tipo_balon_id=tipo_balon_id,
-            cantidad_balones=cantidad_balones,
+            tipo_balon_id=primer_tipo_balon_id,
+            cantidad_balones=cantidad_balones_total,
             fecha_entrega_solicitada=(
                 datetime.fromisoformat(data['fecha_entrega_solicitada'])
                 if data.get('fecha_entrega_solicitada') else None
@@ -588,6 +637,18 @@ def pedidos_route():
         )
         db.session.add(nuevo_pedido)
         db.session.flush()
+
+        # Un pedido puede llevar varios tipos de balón distintos: se crea
+        # una fila PedidoBalon por cada tipo de balón enviado en 'items'.
+        for item in items:
+            tipo_balon_id = item.get('tipo_balon_id')
+            if not tipo_balon_id:
+                continue
+            db.session.add(PedidoBalon(
+                pedido_id=nuevo_pedido.id,
+                tipo_balon_id=tipo_balon_id,
+                cantidad=float(item.get('cantidad', 0))
+            ))
 
         advertencias = []
         materiales_input = items if items else data.get('materiales', [])
