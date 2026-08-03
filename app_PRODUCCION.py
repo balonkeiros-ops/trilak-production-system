@@ -724,16 +724,15 @@ def dashboard():
 @app.route('/')
 def home():
     return app.send_static_file('index.html')
-if __name__ == '__main__':
     with app.app_context():
-        db.create_all()
-        inicializar_datos()
-        cargar_materiales_sgii()
+    db.create_all()
+    inicializar_datos()
+    cargar_materiales_sgii()
 
+if __name__ == '__main__':
     print("=" * 60)
-    print("🏭  SISTEMA DE PRODUCCIÓN TRILAK")
-    print("📡  Servidor en: http://127.0.0.1:5002")
-    print(f"📦  Inventario vinculado: {INVENTARIO_DB_PATH}")
+    print("🛠️ SISTEMA DE PRODUCCIÓN TRILAK")
+    print("🚀 Servidor en: http://127.0.0.1:5002")
+    print(f"📦 Inventario vinculado: {INVENTARIO_DB_PATH}")
     print("=" * 60)
-
-    app.run(host='0.0.0.0', port=5002, debug=True)
+    app.run(debug=True, port=5002)
