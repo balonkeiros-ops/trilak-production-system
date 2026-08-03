@@ -17,12 +17,16 @@ app.secret_key = os.environ.get('SECRET_KEY', 'trilak-dev-secret-cambiar-en-rend
 # (variable que Render inyecta automáticamente al conectar un servicio de
 # Postgres). Si no existe (ej. en tu equipo local), sigue usando SQLite
 # como hasta ahora, así que esto no rompe el desarrollo local.
-_database_url = os.environ.get('DATABASE_URL', 'sqlite:///trilak.db')
-if _database_url.startswith('postgres://'):
+_database_url = os.environ.get('DATABASE_URL', '').strip()
+if not _database_url:
+    # No hay DATABASE_URL (o está vacía) -> usar SQLite como hasta ahora.
+    _database_url = 'sqlite:///trilak.db'
+elif _database_url.startswith('postgres://'):
     # SQLAlchemy 1.4+ exige el prefijo 'postgresql://', Render todavía
     # entrega 'postgres://' en algunas variables.
     _database_url = _database_url.replace('postgres://', 'postgresql://', 1)
 app.config['SQLALCHEMY_DATABASE_URI'] = _database_url
+print(f"[DB] Usando: {_database_url.split('://')[0]}://... (longitud={len(_database_url)})")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JSON_SORT_KEYS'] = False
 
