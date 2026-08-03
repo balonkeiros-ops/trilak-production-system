@@ -153,6 +153,35 @@ class Pedido(db.Model):
         }
 
 
+def generar_numero_pedido():
+    """
+    Genera el número de pedido en el backend (antes lo armaba el frontend con
+    Date.now(), lo que no permitía un formato ni un correlativo controlado).
+
+    Formato: 10 dígitos máximo -> AAAAAAABBBB
+      - Primeros 6 dígitos: fecha de creación en formato ddmmaa (ej. 03/08/26 -> 030826)
+      - Últimos 4 dígitos: correlativo del día, empezando en 1000
+
+    Ejemplo: el primer pedido del 3 de agosto de 2026 -> 0308261000,
+    el segundo ese mismo día -> 0308261001, etc.
+    """
+    prefijo = datetime.now().strftime('%d%m%y')  # 6 dígitos
+    ultimo = (
+        Pedido.query
+        .filter(Pedido.numero_pedido.like(f'{prefijo}%'))
+        .order_by(Pedido.numero_pedido.desc())
+        .first()
+    )
+    correlativo = 1000
+    if ultimo and ultimo.numero_pedido and len(ultimo.numero_pedido) > len(prefijo):
+        sufijo = ultimo.numero_pedido[len(prefijo):]
+        if sufijo.isdigit():
+            correlativo = int(sufijo) + 1
+    # Si algún día se superan los 9999 pedidos en un mismo día, el correlativo
+    # crecerá a 5 dígitos en vez de perder o repetir números.
+    return f'{prefijo}{correlativo}'
+
+
 class MaterialPedido(db.Model):
     """
     Materiales asignados a un pedido.
@@ -546,7 +575,7 @@ def pedidos_route():
         cantidad_balones = data.get('cantidad_balones') or (items[0].get('cantidad', 1) if items else 0)
 
         nuevo_pedido = Pedido(
-            numero_pedido=data.get('numero_pedido'),
+            numero_pedido=generar_numero_pedido(),
             cliente=data.get('cliente'),
             tipo_balon_id=tipo_balon_id,
             cantidad_balones=cantidad_balones,
