@@ -167,7 +167,6 @@ export default function App() {
 
   const PedidosView = () => {
     const [formData, setFormData] = useState({
-      numero_pedido: `PED-${Date.now()}`,
       cliente: '',
       fecha_entrega_solicitada: '',
       items: [{ tipo_balon_id: '', cantidad: 1, material_id: '' }]
@@ -190,7 +189,6 @@ export default function App() {
           alert('✅ Pedido creado exitosamente');
           await cargarDatos();
           setFormData({
-            numero_pedido: `PED-${Date.now()}`,
             cliente: '',
             fecha_entrega_solicitada: '',
             items: [{ tipo_balon_id: '', cantidad: 1, material_id: '' }]
