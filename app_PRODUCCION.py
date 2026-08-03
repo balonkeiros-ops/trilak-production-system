@@ -1,21 +1,28 @@
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory, session
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from datetime import datetime
 import sqlite3
 import os
-
-# Configuración inteligente de la Base de Datos
-database_url = os.environ.get('DATABASE_URL')
-if database_url and database_url.startswith('postgres://'):
-  database_url = database_url.replace('postgres://', 'postgresql://', 1)
-
-app.config['SQLALCHEMY_DATABASE_URI'] = database_url or 'sqlite:///trilak.db'
 import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-app = Flask(__name__, static_folder='build', static_url_path='')
+app = Flask(__name__)
+# 'session' (login) usaba app.secret_key sin que existiera -> NameError en /api/login,
+# /api/logout y en cualquier ruta protegida con @login_required.
+app.secret_key = os.environ.get('SECRET_KEY', 'trilak-dev-secret-cambiar-en-render')
+
+# Usa la base de datos Postgres persistente de Render si existe DATABASE_URL
+# (variable que Render inyecta automáticamente al conectar un servicio de
+# Postgres). Si no existe (ej. en tu equipo local), sigue usando SQLite
+# como hasta ahora, así que esto no rompe el desarrollo local.
+_database_url = os.environ.get('DATABASE_URL', 'sqlite:///trilak.db')
+if _database_url.startswith('postgres://'):
+    # SQLAlchemy 1.4+ exige el prefijo 'postgresql://', Render todavía
+    # entrega 'postgres://' en algunas variables.
+    _database_url = _database_url.replace('postgres://', 'postgresql://', 1)
+app.config['SQLALCHEMY_DATABASE_URI'] = _database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JSON_SORT_KEYS'] = False
 
@@ -396,57 +403,19 @@ def login_required(f):
 
 # ======================== RUTAS API ========================
 
-@app.route('/api/inicializar', methods=['POST'])
-@login_required
-def inicializar_bd():
-    # Esta ruta la pide tu App.jsx al inicio
-    db.create_all()
-    inicializar_datos() # La función que ya creamos
-    return jsonify({"mensaje": "BD Lista"}), 200
-
 @app.route('/api/tipos-balon', methods=['GET'])
-@login_required
 def get_tipos_balon():
     tipos = TipoBalon.query.all()
     return jsonify([t.to_dict() for t in tipos])
 
 
-@app.route('/api/materiales', methods=['GET'])
-@login_required
-def listar_materiales_api():
-    # Tu App.jsx espera 'cantidad_disponible' y 'unidad'
-    mats = Material.query.all()
-    return jsonify([{
-        "id": m.id, 
-        "nombre": m.nombre, 
-        "cantidad_disponible": 100, # O el stock real de SGII
-        "unidad": "metros"
-    } for m in mats])
-
-@app.route('/api/produccion', methods=['GET', 'POST'])
-@login_required
-def gestionar_produccion():
-    if request.method == 'POST':
-        data = request.json
-        nueva_p = Produccion(
-            operario_id=data['operario_id'],
-            tarea_id=data['tarea_id'],
-            pedido_id=data.get('pedido_id'),
-            # cantidad=data.get('cantidad', 1) # Asegúrate que tu modelo tenga 'cantidad'
-        )
-        db.session.add(nueva_p)
-        db.session.commit()
-        return jsonify({"ok": True}), 201
-    
-    # Para el listado de producción
-    prods = Produccion.query.all()
-    return jsonify([{
-        "id": p.id,
-        "operario_nombre": p.operario.nombre,
-        "tarea_nombre": p.tarea.nombre,
-        "fecha": p.fecha.isoformat(),
-        "cantidad": 1 # valor por defecto
-    } for p in prods])
+@app.route('/api/inicializar', methods=['POST'])
+def inicializar_bd():
+    # Esta ruta la pide tu App.jsx al inicio
+    db.create_all()
+    inicializar_datos()
+    cargar_materiales_sgii()
+    return jsonify({"mensaje": "BD Lista"}), 200
 
 
     # ======================== RUTAS PARA SERVIR EL FRONTEND ========================
@@ -721,18 +690,26 @@ def dashboard():
 
 
 # ── ARRANQUE ──────────────────────────────────────────────────────────────────
-@app.route('/')
-def home():
-    return app.send_static_file('index.html')
-    with app.app_context():
+# Importante: esto se ejecuta SIEMPRE al importar el módulo (tanto con
+# "python app_PRODUCCION.py" como con "gunicorn app_PRODUCCION:app", que es
+# lo que usa Render según el Procfile). Antes solo estaba dentro de
+# "if __name__ == '__main__'", así que en Render nunca se creaban las tablas
+# ni se cargaban los tipos de balón / operarios / tareas / materiales.
+with app.app_context():
     db.create_all()
     inicializar_datos()
     cargar_materiales_sgii()
 
+
+@app.route('/')
+def home():
+    return app.send_static_file('index.html')
 if __name__ == '__main__':
+
     print("=" * 60)
-    print("🛠️ SISTEMA DE PRODUCCIÓN TRILAK")
-    print("🚀 Servidor en: http://127.0.0.1:5002")
-    print(f"📦 Inventario vinculado: {INVENTARIO_DB_PATH}")
+    print("🏭  SISTEMA DE PRODUCCIÓN TRILAK")
+    print("📡  Servidor en: http://127.0.0.1:5002")
+    print(f"📦  Inventario vinculado: {INVENTARIO_DB_PATH}")
     print("=" * 60)
-    app.run(debug=True, port=5002)
+
+    app.run(host='0.0.0.0', port=5002, debug=True)
