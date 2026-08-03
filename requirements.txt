@@ -1,4 +1,4 @@
-cFlask
+Flask
 Flask-SQLAlchemy
 Flask-CORS
 python-dotenv
@@ -7,3 +7,4 @@ Werkzeug
 SQLAlchemy
 gunicorn
 psycopg2-binary
+urllib3
