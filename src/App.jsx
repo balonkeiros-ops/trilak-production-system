@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 
-const API_BASE_URL = '';
+const API_BASE_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
+  ? 'http://127.0.0.1:5002/api' 
+  : '/api';
 
 const COLORS = {
   primary: '#164d63',
