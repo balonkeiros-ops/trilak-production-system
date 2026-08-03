@@ -199,6 +199,24 @@ export default function App() {
       }
     };
 
+    const actualizarItem = (index, campo, valor) => {
+      const newItems = [...formData.items];
+      newItems[index] = { ...newItems[index], [campo]: valor };
+      setFormData({ ...formData, items: newItems });
+    };
+
+    const agregarItem = () => {
+      setFormData({
+        ...formData,
+        items: [...formData.items, { tipo_balon_id: '', cantidad: 1, material_id: '' }]
+      });
+    };
+
+    const quitarItem = (index) => {
+      const newItems = formData.items.filter((_, i) => i !== index);
+      setFormData({ ...formData, items: newItems });
+    };
+
     return (
       <div style={{ padding: '30px' }}>
         <h1 style={{ fontSize: '28px', color: COLORS.primary, marginBottom: '30px' }}>📋 Pedidos</h1>
@@ -210,21 +228,40 @@ export default function App() {
 
           <input type="date" value={formData.fecha_entrega_solicitada} onChange={(e) => setFormData({ ...formData, fecha_entrega_solicitada: e.target.value })} style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }} />
 
-          <select value={formData.items[0].tipo_balon_id} onChange={(e) => { const newItems = [...formData.items]; newItems[0].tipo_balon_id = e.target.value; setFormData({ ...formData, items: newItems }); }} style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}>
-            <option value="">-- Seleccionar Tipo de Balón --</option>
-            {tiposBalon.map(tipo => (
-              <option key={tipo.id} value={tipo.id}>{tipo.nombre}</option>
-            ))}
-          </select>
+          {formData.items.map((item, index) => (
+            <div key={index} style={{ border: `1px solid ${COLORS.border}`, borderRadius: '4px', padding: '10px', marginBottom: '10px', position: 'relative' }}>
+              {formData.items.length > 1 && (
+                <button
+                  onClick={() => quitarItem(index)}
+                  title="Quitar este tipo de balón"
+                  style={{ position: 'absolute', top: '6px', right: '6px', border: 'none', background: 'transparent', color: COLORS.danger, cursor: 'pointer', fontWeight: 'bold', fontSize: '16px' }}
+                >
+                  ✕
+                </button>
+              )}
+              <p style={{ margin: '0 0 8px 0', fontSize: '12px', color: '#999', fontWeight: 'bold' }}>Tipo de balón #{index + 1}</p>
 
-          <select value={formData.items[0].material_id} onChange={(e) => { const newItems = [...formData.items]; newItems[0].material_id = e.target.value; setFormData({ ...formData, items: newItems }); }} style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}>
-            <option value="">-- Seleccionar Material --</option>
-            {materiales.map(mat => (
-              <option key={mat.id} value={mat.id}>{mat.nombre} ({mat.cantidad_disponible} {mat.unidad})</option>
-            ))}
-          </select>
+              <select value={item.tipo_balon_id} onChange={(e) => actualizarItem(index, 'tipo_balon_id', e.target.value)} style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}>
+                <option value="">-- Seleccionar Tipo de Balón --</option>
+                {tiposBalon.map(tipo => (
+                  <option key={tipo.id} value={tipo.id}>{tipo.nombre}</option>
+                ))}
+              </select>
 
-          <input type="number" min="1" value={formData.items[0].cantidad} onChange={(e) => { const newItems = [...formData.items]; newItems[0].cantidad = parseInt(e.target.value) || 1; setFormData({ ...formData, items: newItems }); }} placeholder="Cantidad" style={{ width: '100%', padding: '10px', marginBottom: '15px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }} />
+              <select value={item.material_id} onChange={(e) => actualizarItem(index, 'material_id', e.target.value)} style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}>
+                <option value="">-- Seleccionar Material --</option>
+                {materiales.map(mat => (
+                  <option key={mat.id} value={mat.id}>{mat.nombre} ({mat.cantidad_disponible} {mat.unidad})</option>
+                ))}
+              </select>
+
+              <input type="number" min="1" value={item.cantidad} onChange={(e) => actualizarItem(index, 'cantidad', parseInt(e.target.value) || 1)} placeholder="Cantidad" style={{ width: '100%', padding: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }} />
+            </div>
+          ))}
+
+          <button onClick={agregarItem} style={{ width: '100%', padding: '10px', marginBottom: '15px', backgroundColor: 'white', color: COLORS.primary, border: `1px dashed ${COLORS.primary}`, borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>
+            ➕ Agregar otro tipo de balón
+          </button>
 
           <button onClick={crearPedido} style={{ width: '100%', padding: '12px', backgroundColor: COLORS.success, color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>
             ✅ Crear Pedido
@@ -238,6 +275,16 @@ export default function App() {
               <div key={p.id} style={{ backgroundColor: 'white', padding: '15px', borderRadius: '8px', borderLeft: `5px solid ${COLORS.secondary}` }}>
                 <p style={{ fontSize: '16px', fontWeight: 'bold', color: COLORS.primary, margin: '0 0 10px 0' }}>{p.numero_pedido}</p>
                 <p style={{ fontSize: '14px', color: '#666', margin: '0 0 5px 0' }}><strong>Cliente:</strong> {p.cliente}</p>
+                {p.balones && p.balones.length > 0 && (
+                  <div style={{ margin: '0 0 5px 0' }}>
+                    <strong style={{ fontSize: '14px', color: '#666' }}>Balones:</strong>
+                    <ul style={{ margin: '4px 0 0 0', paddingLeft: '18px' }}>
+                      {p.balones.map(b => (
+                        <li key={b.id} style={{ fontSize: '13px', color: '#666' }}>{b.tipo_balon_nombre}: {b.cantidad}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
                 <p style={{ fontSize: '14px', color: '#666', margin: 0 }}><strong>Estado:</strong> {p.estado}</p>
               </div>
             ))}
@@ -287,22 +334,71 @@ export default function App() {
     </div>
   );
 
-  const TiposView = () => (
-    <div style={{ padding: '30px' }}>
-      <h1 style={{ fontSize: '28px', color: COLORS.primary, marginBottom: '30px' }}>⚽ Tipos de Balones ({tiposBalon.length})</h1>
-      {tiposBalon.length > 0 ? (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px' }}>
-          {tiposBalon.map(tipo => (
-            <div key={tipo.id} style={{ backgroundColor: 'white', padding: '20px', borderRadius: '8px', borderLeft: `5px solid ${COLORS.warning}`, textAlign: 'center' }}>
-              <p style={{ fontSize: '18px', fontWeight: 'bold', color: COLORS.primary, margin: 0 }}>{tipo.nombre}</p>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <p style={{ fontSize: '16px', color: '#999' }}>No hay tipos de balones</p>
-      )}
-    </div>
-  );
+  const TiposView = () => {
+    const [tipoSeleccionado, setTipoSeleccionado] = useState(null);
+
+    const pedidosDelTipo = tipoSeleccionado
+      ? pedidos
+          .map(p => {
+            const item = (p.balones || []).find(b => b.tipo_balon_id === tipoSeleccionado.id);
+            return item ? { ...p, cantidadDeEsteTipo: item.cantidad } : null;
+          })
+          .filter(Boolean)
+      : [];
+
+    return (
+      <div style={{ padding: '30px' }}>
+        <h1 style={{ fontSize: '28px', color: COLORS.primary, marginBottom: '30px' }}>⚽ Tipos de Balones ({tiposBalon.length})</h1>
+        {tiposBalon.length > 0 ? (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px' }}>
+            {tiposBalon.map(tipo => {
+              const seleccionado = tipoSeleccionado && tipoSeleccionado.id === tipo.id;
+              return (
+                <div
+                  key={tipo.id}
+                  onClick={() => setTipoSeleccionado(seleccionado ? null : tipo)}
+                  style={{
+                    backgroundColor: 'white',
+                    padding: '20px',
+                    borderRadius: '8px',
+                    borderLeft: `5px solid ${COLORS.warning}`,
+                    textAlign: 'center',
+                    cursor: 'pointer',
+                    boxShadow: seleccionado ? `0 0 0 2px ${COLORS.secondary}` : 'none'
+                  }}
+                >
+                  <p style={{ fontSize: '18px', fontWeight: 'bold', color: COLORS.primary, margin: 0 }}>{tipo.nombre}</p>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p style={{ fontSize: '16px', color: '#999' }}>No hay tipos de balones</p>
+        )}
+
+        {tipoSeleccionado && (
+          <div style={{ marginTop: '30px', backgroundColor: 'white', padding: '20px', borderRadius: '8px' }}>
+            <h2 style={{ fontSize: '20px', color: COLORS.primary, marginBottom: '15px' }}>
+              Pedidos de "{tipoSeleccionado.nombre}" ({pedidosDelTipo.length})
+            </h2>
+            {pedidosDelTipo.length > 0 ? (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '15px' }}>
+                {pedidosDelTipo.map(p => (
+                  <div key={p.id} style={{ padding: '15px', borderRadius: '6px', border: `1px solid ${COLORS.border}`, borderLeft: `4px solid ${COLORS.secondary}` }}>
+                    <p style={{ margin: '0 0 6px 0', fontWeight: 'bold', color: COLORS.primary }}>Pedido: {p.numero_pedido}</p>
+                    <p style={{ margin: '0 0 4px 0' }}>Cliente: {p.cliente}</p>
+                    <p style={{ margin: 0 }}>Balones pedidos: {p.cantidadDeEsteTipo}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p style={{ fontSize: '14px', color: '#999' }}>Aún no hay pedidos con este tipo de balón</p>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   const ProduccionView = () => {
     const [form, setForm] = useState({
