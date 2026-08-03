@@ -8,7 +8,13 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='build/static', static_url_path='/static')
+# Antes: Flask(__name__) sin argumentos crea por defecto una ruta /static/<archivo>
+# que busca en una carpeta "static/" en la raíz del proyecto (que no existe).
+# Esa ruta automática tenía prioridad sobre la ruta personalizada de más abajo
+# (serve()), así que /static/js/main.<hash>.js devolvía 404 SIEMPRE, aunque el
+# archivo sí existiera dentro de build/static/js/. Por eso la página quedaba
+# en blanco: el navegador nunca lograba descargar el bundle de React.
 # 'session' (login) usaba app.secret_key sin que existiera -> NameError en /api/login,
 # /api/logout y en cualquier ruta protegida con @login_required.
 app.secret_key = os.environ.get('SECRET_KEY', 'trilak-dev-secret-cambiar-en-render')
@@ -427,7 +433,11 @@ def inicializar_bd():
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve(path):
-    if path and (path.startswith('static/') or path.startswith('assets/')):
+    # /static/... ya lo sirve Flask automáticamente (ver static_folder arriba).
+    # Aquí solo cubrimos archivos sueltos en la raíz de build/ (favicon.ico,
+    # manifest.json, logo192.png, etc.) y, si no es ninguno de esos, se asume
+    # que es una ruta de React Router y se devuelve index.html.
+    if path and os.path.exists(os.path.join('build', path)):
         return send_from_directory('build', path)
     return send_from_directory('build', 'index.html')
 
@@ -705,9 +715,6 @@ with app.app_context():
     cargar_materiales_sgii()
 
 
-@app.route('/')
-def home():
-    return app.send_static_file('index.html')
 if __name__ == '__main__':
 
     print("=" * 60)
