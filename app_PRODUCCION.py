@@ -4,13 +4,18 @@ from flask_cors import CORS
 from datetime import datetime
 import sqlite3
 import os
-from flask import Flask, send_from_directory
+
+# Configuración inteligente de la Base de Datos
+database_url = os.environ.get('DATABASE_URL')
+if database_url and database_url.startswith('postgres://'):
+  database_url = database_url.replace('postgres://', 'postgresql://', 1)
+
+app.config['SQLALCHEMY_DATABASE_URI'] = database_url or 'sqlite:///trilak.db'
 import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__, static_folder='build', static_url_path='')
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///trilak.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JSON_SORT_KEYS'] = False
 
