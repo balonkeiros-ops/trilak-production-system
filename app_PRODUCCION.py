@@ -9,27 +9,12 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__, static_folder='build/static', static_url_path='/static')
-# Antes: Flask(__name__) sin argumentos crea por defecto una ruta /static/<archivo>
-# que busca en una carpeta "static/" en la raíz del proyecto (que no existe).
-# Esa ruta automática tenía prioridad sobre la ruta personalizada de más abajo
-# (serve()), así que /static/js/main.<hash>.js devolvía 404 SIEMPRE, aunque el
-# archivo sí existiera dentro de build/static/js/. Por eso la página quedaba
-# en blanco: el navegador nunca lograba descargar el bundle de React.
-# 'session' (login) usaba app.secret_key sin que existiera -> NameError en /api/login,
-# /api/logout y en cualquier ruta protegida con @login_required.
 app.secret_key = os.environ.get('SECRET_KEY', 'trilak-dev-secret-cambiar-en-render')
 
-# Usa la base de datos Postgres persistente de Render si existe DATABASE_URL
-# (variable que Render inyecta automáticamente al conectar un servicio de
-# Postgres). Si no existe (ej. en tu equipo local), sigue usando SQLite
-# como hasta ahora, así que esto no rompe el desarrollo local.
 _database_url = os.environ.get('DATABASE_URL', '').strip()
 if not _database_url:
-    # No hay DATABASE_URL (o está vacía) -> usar SQLite como hasta ahora.
     _database_url = 'sqlite:///trilak.db'
 elif _database_url.startswith('postgres://'):
-    # SQLAlchemy 1.4+ exige el prefijo 'postgresql://', Render todavía
-    # entrega 'postgres://' en algunas variables.
     _database_url = _database_url.replace('postgres://', 'postgresql://', 1)
 app.config['SQLALCHEMY_DATABASE_URI'] = _database_url
 print(f"[DB] Usando: {_database_url.split('://')[0]}://... (longitud={len(_database_url)})")
@@ -39,10 +24,6 @@ app.config['JSON_SORT_KEYS'] = False
 db = SQLAlchemy(app)
 CORS(app)
 
-# ================================================================
-# RUTA A LA BASE DE DATOS DE INVENTARIO (app_unificada / SGII)
-# Ajusta esta ruta según donde esté inventario.db en tu equipo
-# ================================================================
 INVENTARIO_DB_PATH = os.path.join(
     os.path.dirname(__file__),
     'inventario_cubiertas', 'instance', 'inventario.db'
@@ -60,14 +41,9 @@ class TipoBalon(db.Model):
 
 
 class Operario(db.Model):
-    """
-    Operarios de la fábrica. Sin tarea fija asignada —
-    cada operario puede realizar cualquier tarea según el día.
-    La asociación operario+tarea queda registrada en Produccion.
-    """
     id = db.Column(db.Integer, primary_key=True)
     nombre = db.Column(db.String(100), nullable=False, unique=True)
-    estado = db.Column(db.String(20), default='disponible')  # disponible / inactivo
+    estado = db.Column(db.String(20), default='disponible')
 
     def to_dict(self):
         return {
@@ -78,10 +54,6 @@ class Operario(db.Model):
 
 
 class Material(db.Model):
-    """
-    Espejo local de los materiales del inventario SGII.
-    El stock real siempre se consulta directamente en inventario.db.
-    """
     id = db.Column(db.Integer, primary_key=True)
     nombre = db.Column(db.String(100), unique=True, nullable=False)
     codigo = db.Column(db.String(100))
@@ -99,10 +71,6 @@ class Material(db.Model):
 
 
 class Tarea(db.Model):
-    """
-    Catálogo de tareas/procesos disponibles en la fábrica.
-    Cualquier operario puede ser asignado a cualquier tarea.
-    """
     id = db.Column(db.Integer, primary_key=True)
     nombre = db.Column(db.String(100), unique=True, nullable=False)
     descripcion = db.Column(db.Text)
@@ -125,6 +93,9 @@ class Pedido(db.Model):
     fecha_entrega_solicitada = db.Column(db.DateTime)
     estado = db.Column(db.String(20), default='pendiente')
     observaciones = db.Column(db.Text)
+    # NUEVOS CAMPOS SOLICITADOS
+    detalles_caracteristicas = db.Column(db.String(500))  # Máximo 500 caracteres con detalles y ortografía
+    imagen_url = db.Column(db.Text)                       # Referencia o nombre de la fotografía adjunta
 
     tipo_balon = db.relationship('TipoBalon')
     materiales = db.relationship(
@@ -145,10 +116,6 @@ class Pedido(db.Model):
             'id': self.id,
             'numero_pedido': self.numero_pedido,
             'cliente': self.cliente,
-            # Se mantienen por compatibilidad con pantallas antiguas: reflejan
-            # el primer tipo de balón y el TOTAL de balones del pedido.
-            # La fuente de verdad para "varios tipos en un mismo pedido" es
-            # la lista 'balones' de abajo.
             'tipo_balon_id': self.tipo_balon_id,
             'tipo_balon_nombre': self.tipo_balon.nombre if self.tipo_balon else None,
             'cantidad_balones': self.cantidad_balones,
@@ -160,16 +127,13 @@ class Pedido(db.Model):
             ),
             'estado': self.estado,
             'observaciones': self.observaciones,
+            'detalles_caracteristicas': self.detalles_caracteristicas,
+            'imagen_url': self.imagen_url,
             'materiales': [m.to_dict() for m in self.materiales]
         }
 
 
 class PedidoBalon(db.Model):
-    """
-    Un pedido puede incluir varios tipos de balón (mismo cliente, mismo
-    número de pedido). Cada fila aquí es "este pedido lleva X balones
-    del tipo Y".
-    """
     __tablename__ = 'pedido_balon'
 
     id = db.Column(db.Integer, primary_key=True)
@@ -190,18 +154,7 @@ class PedidoBalon(db.Model):
 
 
 def generar_numero_pedido():
-    """
-    Genera el número de pedido en el backend (antes lo armaba el frontend con
-    Date.now(), lo que no permitía un formato ni un correlativo controlado).
-
-    Formato: 10 dígitos máximo -> AAAAAAABBBB
-      - Primeros 6 dígitos: fecha de creación en formato ddmmaa (ej. 03/08/26 -> 030826)
-      - Últimos 4 dígitos: correlativo del día, empezando en 1000
-
-    Ejemplo: el primer pedido del 3 de agosto de 2026 -> 0308261000,
-    el segundo ese mismo día -> 0308261001, etc.
-    """
-    prefijo = datetime.now().strftime('%d%m%y')  # 6 dígitos
+    prefijo = datetime.now().strftime('%d%m%y')
     ultimo = (
         Pedido.query
         .filter(Pedido.numero_pedido.like(f'{prefijo}%'))
@@ -213,23 +166,17 @@ def generar_numero_pedido():
         sufijo = ultimo.numero_pedido[len(prefijo):]
         if sufijo.isdigit():
             correlativo = int(sufijo) + 1
-    # Si algún día se superan los 9999 pedidos en un mismo día, el correlativo
-    # crecerá a 5 dígitos en vez de perder o repetir números.
     return f'{prefijo}{correlativo}'
 
 
 class MaterialPedido(db.Model):
-    """
-    Materiales asignados a un pedido.
-    Un pedido puede llevar varios materiales (combinaciones PU/PVC).
-    """
     __tablename__ = 'material_pedido'
 
     id = db.Column(db.Integer, primary_key=True)
     pedido_id = db.Column(db.Integer, db.ForeignKey('pedido.id'), nullable=False)
     material_id = db.Column(db.Integer, db.ForeignKey('material.id'), nullable=False)
-    cantidad = db.Column(db.Float, nullable=False)   # metros a usar
-    observacion = db.Column(db.String(200))           # ej: "cubierta exterior"
+    cantidad = db.Column(db.Float, nullable=False)
+    observacion = db.Column(db.String(200))
 
     material = db.relationship('Material')
 
@@ -245,11 +192,6 @@ class MaterialPedido(db.Model):
 
 
 class Produccion(db.Model):
-    """
-    Registro de trabajo diario: qué operario hizo qué tarea,
-    en qué pedido y cuántas unidades. La tarea se elige en el
-    momento del registro — los operarios son polivalentes.
-    """
     id = db.Column(db.Integer, primary_key=True)
     operario_id = db.Column(db.Integer, db.ForeignKey('operario.id'), nullable=False)
     tarea_id = db.Column(db.Integer, db.ForeignKey('tarea.id'), nullable=False)
@@ -277,13 +219,7 @@ class Produccion(db.Model):
         }
 
 
-# ======================== FUNCIONES DE INVENTARIO ========================
-
 def get_stock_inventario(nombre_material: str) -> float:
-    """
-    Consulta el stock real en inventario.db: entradas - salidas.
-    Retorna -1 si no se puede conectar o el material no existe.
-    """
     if not os.path.exists(INVENTARIO_DB_PATH):
         return -1
     try:
@@ -312,9 +248,6 @@ def get_stock_inventario(nombre_material: str) -> float:
 
 
 def registrar_salida_inventario(nombre_material: str, cantidad: float, referencia: str) -> dict:
-    """
-    Escribe una salida en movimientos de inventario.db.
-    """
     if not os.path.exists(INVENTARIO_DB_PATH):
         return {'ok': False, 'mensaje': f'inventario.db no encontrado en: {INVENTARIO_DB_PATH}'}
     try:
@@ -342,72 +275,40 @@ def registrar_salida_inventario(nombre_material: str, cantidad: float, referenci
         return {'ok': False, 'mensaje': str(e)}
 
 
-# ======================== INICIALIZAR BD ========================
-
 def inicializar_datos():
-    """Carga datos iniciales en la base de datos."""
-
-    # 13 TIPOS DE BALONES (coincide con frontend)
     tipos_balon = [
-                'Balon Futbol #5 32 CASCOS',
-                'Balon Futbol #4 32 CASCOS',
-                'Balon Futbol #3 32 CASCOS',
-                'Balon Futbol #2 32 CASCOS',
-                'Balon Futbol #1 32 CASCOS',
-                'Balon Futbol mini 32 CASCOS',
-                'Balon Futbol Sala 32 CASCOS',
-                'Balon Micro Futbol 32 CASCOS',
-                'Balon Futbol #5 BRAIN',
-                'Balon Futbol #4 BRAIN',
-                'Balon Futbol #3 BRAIN',
-                'Balon Futbol #5 Bola 8',
-                'Balon Futbol #4 Bola 8',
-                'Balon Futbol #3 Bola 8',
-                'Balon Futbol #5 Sportik',
-                'Balon Futbol #4 Sportik',
-                'Balon Futbol #3 Sportik',
-                'OTRO BAlon fuera de Referncia',
-                'Balon Voley Ball',
-                'Balon Voley Ball Mini', 
-                'Balon Baloncesto #7',
-                'Balon Baloncesto #6',
-                'Balon Baloncesto #5',
-                'Balon Baloncesto #3',
+        'Balon Futbol #5 32 CASCOS', 'Balon Futbol #4 32 CASCOS', 'Balon Futbol #3 32 CASCOS',
+        'Balon Futbol #2 32 CASCOS', 'Balon Futbol #1 32 CASCOS', 'Balon Futbol mini 32 CASCOS',
+        'Balon Futbol Sala 32 CASCOS', 'Balon Micro Futbol 32 CASCOS', 'Balon Futbol #5 BRAIN',
+        'Balon Futbol #4 BRAIN', 'Balon Futbol #3 BRAIN', 'Balon Futbol #5 Bola 8',
+        'Balon Futbol #4 Bola 8', 'Balon Futbol #3 Bola 8', 'Balon Futbol #5 Sportik',
+        'Balon Futbol #4 Sportik', 'Balon Futbol #3 Sportik', 'OTRO BAlon fuera de Referncia',
+        'Balon Voley Ball', 'Balon Voley Ball Mini', 'Balon Baloncesto #7',
+        'Balon Baloncesto #6', 'Balon Baloncesto #5', 'Balon Baloncesto #3',
     ]
 
-    # 14 OPERARIOS (nombres completos)
     operarios = [
-        'YEFERSON CAMILO ARDILA VIVIESCAS',
-        'ANYI JAIDYD AMAYA AMAYA',
-        'RUTH SENAIDA GARZON BEJARANO',
-        'ANGELICA MARIA MENDOZA CASTAÑEDA',
-        'LUZ ZAIDA VARGAS PAEZ',
-        'MARTHA STELLA MOLINA MOSQUERA',
-        'EDILSON LUGO GALLO',
-        'JHON JAMES PAEZ ROJAS',
-        'YERLI PAOLA MONROY HERRERA',
-        'SONIA CRISTINA SUAREZ HERNANDEZ',
-        'JAZMIN QUIROGA',
-        'NANCY PAEZ ROJAS',
-        'CAMILO CASTRO',
-        'OTRO OPERARIO'
+        'YEFERSON CAMILO ARDILA VIVIESCAS', 'ANYI JAIDYD AMAYA AMAYA', 'RUTH SENAIDA GARZON BEJARANO',
+        'ANGELICA MARIA MENDOZA CASTAÑEDA', 'LUZ ZAIDA VARGAS PAEZ', 'MARTHA STELLA MOLINA MOSQUERA',
+        'EDILSON LUGO GALLO', 'JHON JAMES PAEZ ROJAS', 'YERLI PAOLA MONROY HERRERA',
+        'SONIA CRISTINA SUAREZ HERNANDEZ', 'JAZMIN QUIROGA', 'NANCY PAEZ ROJAS',
+        'CAMILO CASTRO', 'OTRO OPERARIO'
     ]
 
-    # 13 TAREAS (especialidades)
     tareas = [
         ('Corte de Material', 'Corte de material para balones'),
-        ('Enrollado',         'Proceso de enrollar el material'),
-        ('Masillado',         'Aplicar masilla/acabado'),
-        ('Estampado',         'Estampar logos/diseños'),
-        ('Troquelado',        'Corte con troquel'),
-        ('Repujado',          'Repujar detalles'),
-        ('Re troquelado',     'Segundo corte con troquel'),
-        ('Ensamblado',        'Ensamble de piezas'),
-        ('Planchado',         'Planchar la superficie'),
-        ('Alistamiento',      'Preparación de materiales'),
-        ('Vulcanizado',       'Aplicar calor y presión'),
-        ('Despacho',          'Empaque y despacho'),
-        ('Relleno',           'Relleno de balones')
+        ('Enrollado', 'Proceso de enrollar el material'),
+        ('Masillado', 'Aplicar masilla/acabado'),
+        ('Estampado', 'Estampar logos/diseños'),
+        ('Troquelado', 'Corte con troquel'),
+        ('Repujado', 'Repujar detalles'),
+        ('Re troquelado', 'Segundo corte con troquel'),
+        ('Ensamblado', 'Ensamble de piezas'),
+        ('Planchado', 'Planchar la superficie'),
+        ('Alistamiento', 'Preparación de materiales'),
+        ('Vulcanizado', 'Aplicar calor y presión'),
+        ('Despacho', 'Empaque y despacho'),
+        ('Relleno', 'Relleno de balones')
     ]
 
     for nombre in tipos_balon:
@@ -426,21 +327,20 @@ def inicializar_datos():
 
 
 def cargar_materiales_sgii():
-    """Carga los 40 materiales de cubierta desde SGII como referencia local."""
     materiales_sgii = [
-        ('ARK VERDE', 51.00),    ('AZT BLANCO', 673.00),  ('AZT GALAXY', 4.00),
-        ('BT BLANCO', 10.00),    ('BT ROJO', 50.00),       ('COMUS AMARILLO', 8.00),
-        ('COMUS AZUL', 59.10),   ('COMUS BLANCO', 74.70),  ('COMUS NEGRO', 95.48),
-        ('COMUS NARANJA', 28.00),('GE AMARILLO', 66.10),   ('GER BLANCO', 93.00),
-        ('GER NARANJA', 214.00), ('GER NEGRO', 38.50),     ('GER ROJO', 129.80),
-        ('GER VERDE', 8.00),     ('KOM BLANCO', 39.00),    ('MEETAZUL ELECTRICO', 18.00),
+        ('ARK VERDE', 51.00), ('AZT BLANCO', 673.00), ('AZT GALAXY', 4.00),
+        ('BT BLANCO', 10.00), ('BT ROJO', 50.00), ('COMUS AMARILLO', 8.00),
+        ('COMUS AZUL', 59.10), ('COMUS BLANCO', 74.70), ('COMUS NEGRO', 95.48),
+        ('COMUS NARANJA', 28.00), ('GE AMARILLO', 66.10), ('GER BLANCO', 93.00),
+        ('GER NARANJA', 214.00), ('GER NEGRO', 38.50), ('GER ROJO', 129.80),
+        ('GER VERDE', 8.00), ('KOM BLANCO', 39.00), ('MEETAZUL ELECTRICO', 18.00),
         ('MEETAZUL PETROLEO', 10.00), ('MEETDORADO', 24.50), ('MEETNEGRO', 27.00),
-        ('MEETROJO', 25.00),     ('MEX AMARILLO BANDERA', 28.00), ('MEX AZUL', 38.00),
-        ('MEX BLANCO', 89.00),   ('MEX MAGENTA', 30.00),  ('MEX NARANJA', 75.00),
-        ('MEX NEGRO', 40.00),    ('MEX OASISI VERDE', 30.00), ('MEX ROJO', 25.00),
-        ('MON AMARILLO', 13.00), ('MON VERDE', 37.00),     ('TORS AMARILLO', 18.60),
-        ('TORS AZUL', 43.90),    ('TORS BLANCO', 24.00),   ('TORSOL 2.5', 44.70),
-        ('VOL AMARILLO', 7.00),  ('VOL AZUL', 12.00),      ('VOL BLANCO', 4.00),
+        ('MEETROJO', 25.00), ('MEX AMARILLO BANDERA', 28.00), ('MEX AZUL', 38.00),
+        ('MEX BLANCO', 89.00), ('MEX MAGENTA', 30.00), ('MEX NARANJA', 75.00),
+        ('MEX NEGRO', 40.00), ('MEX OASISI VERDE', 30.00), ('MEX ROJO', 25.00),
+        ('MON AMARILLO', 13.00), ('MON VERDE', 37.00), ('TORS AMARILLO', 18.60),
+        ('TORS AZUL', 43.90), ('TORS BLANCO', 24.00), ('TORSOL 2.5', 44.70),
+        ('VOL AMARILLO', 7.00), ('VOL AZUL', 12.00), ('VOL BLANCO', 4.00),
         ('VOL ROJO', 25.00),
     ]
     for nombre, cantidad in materiales_sgii:
@@ -451,21 +351,21 @@ def cargar_materiales_sgii():
             ))
     db.session.commit()
 
+
 @app.route('/api/login', methods=['POST'])
 def login():
     data = request.json
-    usuario = data.get('usuario')
-    contrasena = data.get('contrasena')
-    # Aquí puedes usar credenciales fijas o validar contra una tabla de usuarios
-    if usuario == 'admin' and contrasena == 'trilak2026':
+    if data.get('usuario') == 'admin' and data.get('contrasena') == 'trilak2026':
         session['logged_in'] = True
         return jsonify({'ok': True})
     return jsonify({'ok': False}), 401
+
 
 @app.route('/api/logout', methods=['POST'])
 def logout():
     session.pop('logged_in', None)
     return jsonify({'ok': True})
+
 
 def login_required(f):
     from functools import wraps
@@ -476,46 +376,32 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
-# ======================== RUTAS API ========================
 
 @app.route('/api/tipos-balon', methods=['GET'])
 def get_tipos_balon():
-    tipos = TipoBalon.query.all()
-    return jsonify([t.to_dict() for t in tipos])
+    return jsonify([t.to_dict() for t in TipoBalon.query.all()])
 
 
 @app.route('/api/inicializar', methods=['POST'])
 def inicializar_bd():
-    # Esta ruta la pide tu App.jsx al inicio
     db.create_all()
     inicializar_datos()
     cargar_materiales_sgii()
     return jsonify({"mensaje": "BD Lista"}), 200
 
 
-    # ======================== RUTAS PARA SERVIR EL FRONTEND ========================
-
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve(path):
-    # /static/... ya lo sirve Flask automáticamente (ver static_folder arriba).
-    # Aquí solo cubrimos archivos sueltos en la raíz de build/ (favicon.ico,
-    # manifest.json, logo192.png, etc.) y, si no es ninguno de esos, se asume
-    # que es una ruta de React Router y se devuelve index.html.
     if path and os.path.exists(os.path.join('build', path)):
         return send_from_directory('build', path)
     return send_from_directory('build', 'index.html')
 
 
-# ── OPERARIOS ─────────────────────────────────────────────────────────────────
-
 @app.route('/api/operarios', methods=['GET', 'POST'])
 def operarios_route():
     if request.method == 'GET':
-        ops = Operario.query.order_by(Operario.nombre).all()
-        return jsonify([op.to_dict() for op in ops])
-
-    # POST: agregar nuevo operario
+        return jsonify([op.to_dict() for op in Operario.query.order_by(Operario.nombre).all()])
     data = request.json
     if not data.get('nombre'):
         return jsonify({'error': 'El nombre es obligatorio'}), 400
@@ -527,7 +413,6 @@ def operarios_route():
 
 @app.route('/api/operarios/<int:operario_id>', methods=['PATCH'])
 def actualizar_operario(operario_id):
-    """Actualiza estado del operario: disponible / inactivo."""
     operario = Operario.query.get_or_404(operario_id)
     data = request.json
     if 'estado' in data:
@@ -538,22 +423,13 @@ def actualizar_operario(operario_id):
     return jsonify(operario.to_dict())
 
 
-# ── TAREAS ────────────────────────────────────────────────────────────────────
-
 @app.route('/api/tareas', methods=['GET'])
 def get_tareas():
-    """Lista todas las tareas disponibles."""
     return jsonify([t.to_dict() for t in Tarea.query.order_by(Tarea.nombre).all()])
 
 
-# ── MATERIALES ────────────────────────────────────────────────────────────────
-
 @app.route('/api/materiales', methods=['GET'])
 def get_materiales():
-    """
-    Lista todos los materiales con stock real desde inventario.db.
-    Si no hay conexión, usa el valor local como respaldo.
-    """
     materiales = Material.query.order_by(Material.nombre).all()
     resultado = []
     for m in materiales:
@@ -567,33 +443,13 @@ def get_materiales():
 
 @app.route('/api/materiales/<int:material_id>/stock', methods=['GET'])
 def get_stock_material(material_id):
-    """
-    Consulta en vivo el stock de un material específico.
-    El frontend lo llama cada vez que se selecciona un material en el pedido.
-    """
     material = Material.query.get_or_404(material_id)
     stock_real = get_stock_inventario(material.nombre)
-
     if stock_real >= 0:
-        return jsonify({
-            'material_id': material_id,
-            'nombre': material.nombre,
-            'stock_disponible': stock_real,
-            'unidad': material.unidad,
-            'fuente': 'inventario'
-        })
+        return jsonify({'material_id': material_id, 'nombre': material.nombre, 'stock_disponible': stock_real, 'unidad': material.unidad, 'fuente': 'inventario'})
     else:
-        return jsonify({
-            'material_id': material_id,
-            'nombre': material.nombre,
-            'stock_disponible': material.cantidad_disponible,
-            'unidad': material.unidad,
-            'fuente': 'local',
-            'advertencia': 'No se pudo conectar con inventario.db — mostrando stock local'
-        })
+        return jsonify({'material_id': material_id, 'nombre': material.nombre, 'stock_disponible': material.cantidad_disponible, 'unidad': material.unidad, 'fuente': 'local'})
 
-
-# ── PEDIDOS ───────────────────────────────────────────────────────────────────
 
 @app.route('/api/pedidos', methods=['GET', 'POST'])
 def pedidos_route():
@@ -601,27 +457,17 @@ def pedidos_route():
         peds = Pedido.query.order_by(Pedido.fecha_creacion.desc()).all()
         return jsonify([p.to_dict() for p in peds])
 
-    # POST: crear pedido con uno o varios materiales
     try:
         data = request.json
-
-        # Aceptar tanto formato 'items' (frontend original) como 'materiales'
         items = data.get('items', [])
-        # Compatibilidad hacia atrás: si alguien manda tipo_balon_id suelto
-        # (sin 'items'), se trata como un único ítem.
         if not items and data.get('tipo_balon_id'):
             items = [{
                 'tipo_balon_id': data.get('tipo_balon_id'),
                 'cantidad': data.get('cantidad_balones', 1)
             }]
 
-        # 'tipo_balon_id'/'cantidad_balones' en Pedido se mantienen solo como
-        # resumen (primer tipo pedido y total de balones del pedido); el
-        # detalle real por tipo de balón vive en la tabla PedidoBalon.
         primer_tipo_balon_id = items[0].get('tipo_balon_id') if items else None
-        cantidad_balones_total = sum(
-            float(it.get('cantidad', 0)) for it in items if it.get('tipo_balon_id')
-        )
+        cantidad_balones_total = sum(float(it.get('cantidad', 0)) for it in items if it.get('tipo_balon_id'))
 
         nuevo_pedido = Pedido(
             numero_pedido=generar_numero_pedido(),
@@ -633,13 +479,13 @@ def pedidos_route():
                 if data.get('fecha_entrega_solicitada') else None
             ),
             observaciones=data.get('observaciones', ''),
+            detalles_caracteristicas=data.get('detalles_caracteristicas', '')[:500], # Máximo 500 caracteres
+            imagen_url=data.get('imagen_url', ''),
             estado='pendiente'
         )
         db.session.add(nuevo_pedido)
         db.session.flush()
 
-        # Un pedido puede llevar varios tipos de balón distintos: se crea
-        # una fila PedidoBalon por cada tipo de balón enviado en 'items'.
         for item in items:
             tipo_balon_id = item.get('tipo_balon_id')
             if not tipo_balon_id:
@@ -659,21 +505,14 @@ def pedidos_route():
                 continue
             material = Material.query.get(material_id)
             if not material:
-                advertencias.append(f'Material ID {material_id} no encontrado, se omite')
                 continue
 
             cantidad = float(mat_data.get('cantidad', 0))
-
-            # Verificar stock real antes de descontar
             stock_real = get_stock_inventario(material.nombre)
             stock_check = stock_real if stock_real >= 0 else material.cantidad_disponible
 
             if stock_check < cantidad:
-                advertencias.append(
-                    f'⚠ Stock insuficiente para "{material.nombre}": '
-                    f'disponible {stock_check} m, solicitado {cantidad} m. '
-                    f'Pedido guardado de todas formas.'
-                )
+                advertencias.append(f'⚠ Stock insuficiente para "{material.nombre}". Pedido guardado.')
 
             db.session.add(MaterialPedido(
                 pedido_id=nuevo_pedido.id,
@@ -682,24 +521,13 @@ def pedidos_route():
                 observacion=mat_data.get('observacion', '')
             ))
 
-            # Descontar en trilak.db (local)
             material.cantidad_disponible = max(0.0, material.cantidad_disponible - cantidad)
-
-            # Descontar en inventario.db (SGII)
-            resultado = registrar_salida_inventario(
-                nombre_material=material.nombre,
-                cantidad=cantidad,
-                referencia=data.get('numero_pedido', 'SIN-REF')
-            )
-            if not resultado['ok']:
-                advertencias.append(f'Inventario SGII: {resultado["mensaje"]}')
+            registrar_salida_inventario(material.nombre, cantidad, nuevo_pedido.numero_pedido)
 
         db.session.commit()
-
         respuesta = nuevo_pedido.to_dict()
         if advertencias:
             respuesta['advertencias'] = advertencias
-
         return jsonify(respuesta), 201
 
     except Exception as e:
@@ -709,45 +537,29 @@ def pedidos_route():
 
 @app.route('/api/pedidos/<int:pedido_id>', methods=['GET'])
 def get_pedido(pedido_id):
-    """Obtiene un pedido por ID."""
     return jsonify(Pedido.query.get_or_404(pedido_id).to_dict())
 
 
 @app.route('/api/pedidos/<int:pedido_id>/estado', methods=['PATCH'])
 def actualizar_estado_pedido(pedido_id):
-    """Cambia el estado: pendiente / en_proceso / completado / cancelado."""
     pedido = Pedido.query.get_or_404(pedido_id)
-    estados_validos = ['pendiente', 'en_proceso', 'completado', 'cancelado']
     nuevo_estado = request.json.get('estado')
-    if nuevo_estado not in estados_validos:
-        return jsonify({'error': f'Estado inválido. Opciones: {estados_validos}'}), 400
+    if nuevo_estado not in ['pendiente', 'en_proceso', 'completado', 'cancelado']:
+        return jsonify({'error': 'Estado inválido'}), 400
     pedido.estado = nuevo_estado
     db.session.commit()
     return jsonify(pedido.to_dict())
 
 
-# ── PRODUCCIÓN ────────────────────────────────────────────────────────────────
-
 @app.route('/api/produccion', methods=['GET', 'POST'])
 def produccion_route():
     if request.method == 'GET':
-        registros = Produccion.query.order_by(Produccion.fecha.desc()).all()
-        return jsonify([r.to_dict() for r in registros])
-
+        return jsonify([r.to_dict() for r in Produccion.query.order_by(Produccion.fecha.desc()).all()])
     try:
         data = request.json
-
-        operario = Operario.query.get(data.get('operario_id'))
-        tarea = Tarea.query.get(data.get('tarea_id'))
-
-        if not operario:
-            return jsonify({'error': 'Operario no encontrado'}), 400
-        if not tarea:
-            return jsonify({'error': 'Tarea no encontrada'}), 400
-
         nueva = Produccion(
-            operario_id=operario.id,
-            tarea_id=tarea.id,
+            operario_id=data.get('operario_id'),
+            tarea_id=data.get('tarea_id'),
             pedido_id=data.get('pedido_id') or None,
             cantidad=data.get('cantidad', 1),
             fecha=datetime.fromisoformat(data['fecha']) if data.get('fecha') else datetime.now(),
@@ -756,25 +568,13 @@ def produccion_route():
         db.session.add(nueva)
         db.session.commit()
         return jsonify(nueva.to_dict()), 201
-
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/produccion/por-operario/<int:operario_id>', methods=['GET'])
-def produccion_por_operario(operario_id):
-    """Historial de tareas realizadas por un operario específico."""
-    registros = Produccion.query.filter_by(operario_id=operario_id)\
-        .order_by(Produccion.fecha.desc()).all()
-    return jsonify([r.to_dict() for r in registros])
-
-
-# ── DASHBOARD ─────────────────────────────────────────────────────────────────
-
 @app.route('/api/dashboard', methods=['GET'])
 def dashboard():
-    """Retorna métricas para el panel de control."""
     return jsonify({
         'metricas': {
             'total_pedidos': Pedido.query.count(),
@@ -793,24 +593,10 @@ def dashboard():
     })
 
 
-# ── ARRANQUE ──────────────────────────────────────────────────────────────────
-# Importante: esto se ejecuta SIEMPRE al importar el módulo (tanto con
-# "python app_PRODUCCION.py" como con "gunicorn app_PRODUCCION:app", que es
-# lo que usa Render según el Procfile). Antes solo estaba dentro de
-# "if __name__ == '__main__'", así que en Render nunca se creaban las tablas
-# ni se cargaban los tipos de balón / operarios / tareas / materiales.
 with app.app_context():
     db.create_all()
     inicializar_datos()
     cargar_materiales_sgii()
 
-
 if __name__ == '__main__':
-
-    print("=" * 60)
-    print("🏭  SISTEMA DE PRODUCCIÓN TRILAK")
-    print("📡  Servidor en: http://127.0.0.1:5002")
-    print(f"📦  Inventario vinculado: {INVENTARIO_DB_PATH}")
-    print("=" * 60)
-
     app.run(host='0.0.0.0', port=5002, debug=True)
