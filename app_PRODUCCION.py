@@ -1000,7 +1000,9 @@ def dashboard():
 # lo que usa Render según el Procfile). Antes solo estaba dentro de
 # "if __name__ == '__main__'", así que en Render nunca se creaban las tablas
 # ni se cargaban los tipos de balón / operarios / tareas / materiales.
-with app.app_context():
+
+    with app.app_context():
+    db.drop_all()  # <--- Agrega esto temporalmente para borrar la tabla vieja
     db.create_all()
     inicializar_datos()
     cargar_materiales_sgii()
