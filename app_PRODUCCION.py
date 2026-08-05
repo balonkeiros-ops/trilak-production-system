@@ -290,16 +290,27 @@ class MaterialPedido(db.Model):
 
 class Produccion(db.Model):
     """
-    Registro de trabajo diario: qué operario hizo qué tarea,
-    en qué pedido y cuántas unidades. La tarea se elige en el
-    momento del registro — los operarios son polivalentes.
+    Registro de trabajo por ciclo: qué operario hizo qué tarea, en qué
+    pedido, entre qué hora de inicio y qué hora de fin. La tarea se
+    elige en el momento del registro — los operarios son polivalentes.
+
+    Ciclo de vida de un registro:
+      1) POST /api/produccion/iniciar   -> estado='en_progreso', hora_inicio=ahora, hora_fin=None
+      2) PATCH /api/produccion/<id>/finalizar -> estado='finalizada', hora_fin=ahora,
+         cantidad=unidades procesadas, duracion_segundos=hora_fin - hora_inicio
     """
     id = db.Column(db.Integer, primary_key=True)
     operario_id = db.Column(db.Integer, db.ForeignKey('operario.id'), nullable=False)
     tarea_id = db.Column(db.Integer, db.ForeignKey('tarea.id'), nullable=False)
     pedido_id = db.Column(db.Integer, db.ForeignKey('pedido.id'), nullable=True)
-    cantidad = db.Column(db.Float, default=1)
+    cantidad = db.Column(db.Float, default=0)
+    # 'fecha' se conserva por compatibilidad con pantallas/ordenamientos
+    # antiguos: siempre refleja el momento de inicio de la tarea.
     fecha = db.Column(db.DateTime, default=datetime.now)
+    hora_inicio = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    hora_fin = db.Column(db.DateTime, nullable=True)
+    duracion_segundos = db.Column(db.Integer, nullable=True)
+    estado = db.Column(db.String(20), default='en_progreso')  # en_progreso / finalizada
     observaciones = db.Column(db.Text)
 
     operario = db.relationship('Operario', backref='producciones')
@@ -317,8 +328,29 @@ class Produccion(db.Model):
             'pedido_numero': self.pedido.numero_pedido if self.pedido else None,
             'cantidad': self.cantidad,
             'fecha': self.fecha.isoformat(),
+            'hora_inicio': self.hora_inicio.isoformat() if self.hora_inicio else None,
+            'hora_fin': self.hora_fin.isoformat() if self.hora_fin else None,
+            'duracion_segundos': self.duracion_segundos,
+            'duracion_formateada': formatear_duracion(self.duracion_segundos),
+            'estado': self.estado,
             'observaciones': self.observaciones
         }
+
+
+def formatear_duracion(segundos):
+    """Convierte segundos totales en 'Hh Mm Ss' legible. None -> None."""
+    if segundos is None:
+        return None
+    segundos = int(segundos)
+    horas, resto = divmod(segundos, 3600)
+    minutos, seg = divmod(resto, 60)
+    partes = []
+    if horas:
+        partes.append(f'{horas}h')
+    if minutos or horas:
+        partes.append(f'{minutos}m')
+    partes.append(f'{seg}s')
+    return ' '.join(partes)
 
 
 # ======================== FUNCIONES DE INVENTARIO ========================
@@ -815,14 +847,23 @@ def actualizar_estado_pedido(pedido_id):
 
 # ── PRODUCCIÓN ────────────────────────────────────────────────────────────────
 
-@app.route('/api/produccion', methods=['GET', 'POST'])
+@app.route('/api/produccion', methods=['GET'])
 def produccion_route():
-    if request.method == 'GET':
-        registros = Produccion.query.order_by(Produccion.fecha.desc()).all()
-        return jsonify([r.to_dict() for r in registros])
+    """Lista todos los registros de producción (en progreso y finalizados)."""
+    registros = Produccion.query.order_by(Produccion.fecha.desc()).all()
+    return jsonify([r.to_dict() for r in registros])
 
+
+@app.route('/api/produccion/iniciar', methods=['POST'])
+def iniciar_tarea():
+    """
+    Escenario: 'Registro exitoso del ciclo de una tarea de producción' (paso 1).
+    El operario selecciona operario + tarea + pedido y pulsa "Iniciar Tarea".
+    El sistema registra la fecha/hora de inicio y devuelve el registro creado
+    (estado='en_progreso') para que el frontend muestre el cronómetro.
+    """
     try:
-        data = request.json
+        data = request.json or {}
 
         operario = Operario.query.get(data.get('operario_id'))
         tarea = Tarea.query.get(data.get('tarea_id'))
@@ -832,12 +873,32 @@ def produccion_route():
         if not tarea:
             return jsonify({'error': 'Tarea no encontrada'}), 400
 
+        pedido_id = data.get('pedido_id') or None
+        if pedido_id and not Pedido.query.get(pedido_id):
+            return jsonify({'error': 'Pedido no encontrado'}), 400
+
+        # Regla de negocio: un operario no puede tener dos tareas
+        # "en_progreso" al mismo tiempo (evita cronómetros duplicados).
+        tarea_abierta = Produccion.query.filter_by(
+            operario_id=operario.id, estado='en_progreso'
+        ).first()
+        if tarea_abierta:
+            return jsonify({
+                'error': 'Este operario ya tiene una tarea en progreso. '
+                         'Debe finalizarla antes de iniciar otra.',
+                'tarea_en_progreso': tarea_abierta.to_dict()
+            }), 409
+
+        ahora = datetime.now()
         nueva = Produccion(
             operario_id=operario.id,
             tarea_id=tarea.id,
-            pedido_id=data.get('pedido_id') or None,
-            cantidad=data.get('cantidad', 1),
-            fecha=datetime.fromisoformat(data['fecha']) if data.get('fecha') else datetime.now(),
+            pedido_id=pedido_id,
+            cantidad=0,
+            fecha=ahora,
+            hora_inicio=ahora,
+            hora_fin=None,
+            estado='en_progreso',
             observaciones=data.get('observaciones', '')
         )
         db.session.add(nueva)
@@ -847,6 +908,59 @@ def produccion_route():
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/produccion/<int:produccion_id>/finalizar', methods=['PATCH'])
+def finalizar_tarea(produccion_id):
+    """
+    Escenario: 'Registro exitoso del ciclo de una tarea de producción' (paso 2).
+    El operario ingresa las unidades procesadas y pulsa "Finalizar Tarea".
+    El sistema calcula el tiempo total transcurrido desde el inicio y
+    almacena el registro (vinculado al pedido) para métricas posteriores.
+    """
+    try:
+        registro = Produccion.query.get_or_404(produccion_id)
+
+        if registro.estado == 'finalizada':
+            return jsonify({'error': 'Esta tarea ya fue finalizada'}), 400
+
+        data = request.json or {}
+        cantidad = data.get('cantidad')
+        if cantidad is None:
+            return jsonify({'error': 'Debe indicar el número de unidades procesadas'}), 400
+        try:
+            cantidad = float(cantidad)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'Cantidad inválida'}), 400
+        if cantidad < 0:
+            return jsonify({'error': 'La cantidad no puede ser negativa'}), 400
+
+        ahora = datetime.now()
+        registro.hora_fin = ahora
+        registro.cantidad = cantidad
+        registro.duracion_segundos = int((ahora - registro.hora_inicio).total_seconds())
+        registro.estado = 'finalizada'
+        if data.get('observaciones'):
+            registro.observaciones = data['observaciones']
+
+        db.session.commit()
+        return jsonify(registro.to_dict())
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/produccion/en-progreso/<int:operario_id>', methods=['GET'])
+def produccion_en_progreso(operario_id):
+    """
+    Devuelve la tarea 'en_progreso' del operario (si existe), para poder
+    restaurar el cronómetro en pantalla tras un refresco de página.
+    """
+    registro = Produccion.query.filter_by(
+        operario_id=operario_id, estado='en_progreso'
+    ).first()
+    return jsonify(registro.to_dict() if registro else None)
 
 
 @app.route('/api/produccion/por-operario/<int:operario_id>', methods=['GET'])
