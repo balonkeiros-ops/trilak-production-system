@@ -1,7 +1,7 @@
 from flask import Flask, jsonify, request, send_from_directory, session
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
-from datetime import datetime
+from datetime import datetime, timezone
 import sqlite3
 import os
 import base64
@@ -48,6 +48,15 @@ INVENTARIO_DB_PATH = os.path.join(
     os.path.dirname(__file__),
     'inventario_cubiertas', 'instance', 'inventario.db'
 )
+
+
+def to_iso_utc(dt):
+    """Convierte un objeto datetime a cadena ISO 8601 con sufijo 'Z' (UTC)."""
+    if not dt:
+        return None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt.isoformat() + 'Z'
 
 
 # ======================== MODELOS ========================
@@ -122,7 +131,7 @@ class Pedido(db.Model):
     cliente = db.Column(db.String(150), nullable=False)
     tipo_balon_id = db.Column(db.Integer, db.ForeignKey('tipo_balon.id'), nullable=True)
     cantidad_balones = db.Column(db.Float, default=0)
-    fecha_creacion = db.Column(db.DateTime, default=datetime.now)
+    fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
     fecha_entrega_solicitada = db.Column(db.DateTime)
     estado = db.Column(db.String(20), default='pendiente')
     observaciones = db.Column(db.Text)
@@ -160,11 +169,8 @@ class Pedido(db.Model):
             'tipo_balon_nombre': self.tipo_balon.nombre if self.tipo_balon else None,
             'cantidad_balones': self.cantidad_balones,
             'balones': [b.to_dict() for b in self.balones],
-            'fecha_creacion': self.fecha_creacion.isoformat(),
-            'fecha_entrega_solicitada': (
-                self.fecha_entrega_solicitada.isoformat()
-                if self.fecha_entrega_solicitada else None
-            ),
+            'fecha_creacion': to_iso_utc(self.fecha_creacion),
+            'fecha_entrega_solicitada': to_iso_utc(self.fecha_entrega_solicitada),
             'estado': self.estado,
             # Detalles/características redactadas del pedido (máx. 500 caracteres,
             # validado también en el backend en generar_numero_pedido/crear pedido).
@@ -194,7 +200,7 @@ class PedidoImagen(db.Model):
     nombre_archivo = db.Column(db.String(255))
     tipo_mime = db.Column(db.String(50))          # 'image/png' o 'image/jpeg'
     contenido_base64 = db.Column(db.Text, nullable=False)
-    fecha_subida = db.Column(db.DateTime, default=datetime.now)
+    fecha_subida = db.Column(db.DateTime, default=datetime.utcnow)
 
     def to_dict(self):
         # No se incluye 'contenido_base64' aquí a propósito (ver docstring
@@ -204,7 +210,7 @@ class PedidoImagen(db.Model):
             'pedido_id': self.pedido_id,
             'nombre_archivo': self.nombre_archivo,
             'tipo_mime': self.tipo_mime,
-            'fecha_subida': self.fecha_subida.isoformat()
+            'fecha_subida': to_iso_utc(self.fecha_subida)
         }
 
 
@@ -245,7 +251,7 @@ def generar_numero_pedido():
     Ejemplo: el primer pedido del 3 de agosto de 2026 -> 0308261000,
     el segundo ese mismo día -> 0308261001, etc.
     """
-    prefijo = datetime.now().strftime('%d%m%y')  # 6 dígitos
+    prefijo = datetime.utcnow().strftime('%d%m%y')  # 6 dígitos
     ultimo = (
         Pedido.query
         .filter(Pedido.numero_pedido.like(f'{prefijo}%'))
@@ -313,8 +319,8 @@ class Produccion(db.Model):
     observacion_calidad = db.Column(db.Text)
     # 'fecha' se conserva por compatibilidad con pantallas/ordenamientos
     # antiguos: siempre refleja el momento de inicio de la tarea.
-    fecha = db.Column(db.DateTime, default=datetime.now)
-    hora_inicio = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    fecha = db.Column(db.DateTime, default=datetime.utcnow)
+    hora_inicio = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     hora_fin = db.Column(db.DateTime, nullable=True)
     duracion_segundos = db.Column(db.Integer, nullable=True)
     estado = db.Column(db.String(20), default='en_progreso')  # en_progreso / finalizada
@@ -341,9 +347,9 @@ class Produccion(db.Model):
             'unidades_defectuosas': self.unidades_defectuosas,
             'porcentaje_calidad': porcentaje_calidad,
             'observacion_calidad': self.observacion_calidad,
-            'fecha': self.fecha.isoformat(),
-            'hora_inicio': self.hora_inicio.isoformat() if self.hora_inicio else None,
-            'hora_fin': self.hora_fin.isoformat() if self.hora_fin else None,
+            'fecha': to_iso_utc(self.fecha),
+            'hora_inicio': to_iso_utc(self.hora_inicio),
+            'hora_fin': to_iso_utc(self.hora_fin),
             'duracion_segundos': self.duracion_segundos,
             'duracion_formateada': formatear_duracion(self.duracion_segundos),
             'estado': self.estado,
@@ -419,7 +425,7 @@ def registrar_salida_inventario(nombre_material: str, cantidad: float, referenci
             conn.close()
             return {'ok': False, 'mensaje': f'"{nombre_material}" no encontrado en inventario'}
         material_id = row[0]
-        ahora = datetime.now().isoformat()
+        ahora = to_iso_utc(datetime.utcnow())
         cursor.execute("""
             INSERT INTO movimientos
                 (material_id, tipo, cantidad, fecha, referencia, descripcion, usuario, created_at)
@@ -734,15 +740,22 @@ def pedidos_route():
                          f'(tiene {len(detalles_pedido)}).'
             }), 400
 
+        fecha_entrega = None
+        if data.get('fecha_entrega_solicitada'):
+            val = data['fecha_entrega_solicitada']
+            if isinstance(val, str):
+                val = val.replace('Z', '+00:00')
+            dt_ent = datetime.fromisoformat(val)
+            if dt_ent.tzinfo is not None:
+                dt_ent = dt_ent.astimezone(timezone.utc).replace(tzinfo=None)
+            fecha_entrega = dt_ent
+
         nuevo_pedido = Pedido(
             numero_pedido=generar_numero_pedido(),
             cliente=data.get('cliente'),
             tipo_balon_id=primer_tipo_balon_id,
             cantidad_balones=cantidad_balones_total,
-            fecha_entrega_solicitada=(
-                datetime.fromisoformat(data['fecha_entrega_solicitada'])
-                if data.get('fecha_entrega_solicitada') else None
-            ),
+            fecha_entrega_solicitada=fecha_entrega,
             observaciones=detalles_pedido,
             estado='pendiente'
         )
@@ -903,7 +916,7 @@ def iniciar_tarea():
                 'tarea_en_progreso': tarea_abierta.to_dict()
             }), 409
 
-        ahora = datetime.now()
+        ahora = datetime.utcnow()
         nueva = Produccion(
             operario_id=operario.id,
             tarea_id=tarea.id,
@@ -959,7 +972,7 @@ def finalizar_tarea(produccion_id):
         except ValueError as ve:
             return jsonify({'error': str(ve)}), 400
 
-        ahora = datetime.now()
+        ahora = datetime.utcnow()
         registro.hora_fin = ahora
         registro.unidades_buenas = unidades_buenas
         registro.unidades_defectuosas = unidades_defectuosas
