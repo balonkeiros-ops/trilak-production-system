@@ -1,7 +1,8 @@
-from flask import Flask, jsonify, request, send_from_directory, session
+from flask import Flask, jsonify, request, send_from_directory, session, send_file
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
-from datetime import datetime, timezone
+from datetime import datetime
+from io import BytesIO
 import sqlite3
 import os
 import base64
@@ -48,15 +49,6 @@ INVENTARIO_DB_PATH = os.path.join(
     os.path.dirname(__file__),
     'inventario_cubiertas', 'instance', 'inventario.db'
 )
-
-
-def to_iso_utc(dt):
-    """Convierte un objeto datetime a cadena ISO 8601 con sufijo 'Z' (UTC)."""
-    if not dt:
-        return None
-    if dt.tzinfo is not None:
-        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
-    return dt.isoformat() + 'Z'
 
 
 # ======================== MODELOS ========================
@@ -131,7 +123,7 @@ class Pedido(db.Model):
     cliente = db.Column(db.String(150), nullable=False)
     tipo_balon_id = db.Column(db.Integer, db.ForeignKey('tipo_balon.id'), nullable=True)
     cantidad_balones = db.Column(db.Float, default=0)
-    fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
+    fecha_creacion = db.Column(db.DateTime, default=datetime.now)
     fecha_entrega_solicitada = db.Column(db.DateTime)
     estado = db.Column(db.String(20), default='pendiente')
     observaciones = db.Column(db.Text)
@@ -169,8 +161,11 @@ class Pedido(db.Model):
             'tipo_balon_nombre': self.tipo_balon.nombre if self.tipo_balon else None,
             'cantidad_balones': self.cantidad_balones,
             'balones': [b.to_dict() for b in self.balones],
-            'fecha_creacion': to_iso_utc(self.fecha_creacion),
-            'fecha_entrega_solicitada': to_iso_utc(self.fecha_entrega_solicitada),
+            'fecha_creacion': self.fecha_creacion.isoformat(),
+            'fecha_entrega_solicitada': (
+                self.fecha_entrega_solicitada.isoformat()
+                if self.fecha_entrega_solicitada else None
+            ),
             'estado': self.estado,
             # Detalles/características redactadas del pedido (máx. 500 caracteres,
             # validado también en el backend en generar_numero_pedido/crear pedido).
@@ -200,7 +195,7 @@ class PedidoImagen(db.Model):
     nombre_archivo = db.Column(db.String(255))
     tipo_mime = db.Column(db.String(50))          # 'image/png' o 'image/jpeg'
     contenido_base64 = db.Column(db.Text, nullable=False)
-    fecha_subida = db.Column(db.DateTime, default=datetime.utcnow)
+    fecha_subida = db.Column(db.DateTime, default=datetime.now)
 
     def to_dict(self):
         # No se incluye 'contenido_base64' aquí a propósito (ver docstring
@@ -210,7 +205,7 @@ class PedidoImagen(db.Model):
             'pedido_id': self.pedido_id,
             'nombre_archivo': self.nombre_archivo,
             'tipo_mime': self.tipo_mime,
-            'fecha_subida': to_iso_utc(self.fecha_subida)
+            'fecha_subida': self.fecha_subida.isoformat()
         }
 
 
@@ -251,7 +246,7 @@ def generar_numero_pedido():
     Ejemplo: el primer pedido del 3 de agosto de 2026 -> 0308261000,
     el segundo ese mismo día -> 0308261001, etc.
     """
-    prefijo = datetime.utcnow().strftime('%d%m%y')  # 6 dígitos
+    prefijo = datetime.now().strftime('%d%m%y')  # 6 dígitos
     ultimo = (
         Pedido.query
         .filter(Pedido.numero_pedido.like(f'{prefijo}%'))
@@ -319,6 +314,10 @@ class Produccion(db.Model):
     observacion_calidad = db.Column(db.Text)
     # 'fecha' se conserva por compatibilidad con pantallas/ordenamientos
     # antiguos: siempre refleja el momento de inicio de la tarea.
+    # Nota: se guarda siempre en UTC (datetime.utcnow) y se marca como tal
+    # al serializar (sufijo 'Z'), para que el cronómetro del navegador
+    # calcule el tiempo transcurrido correctamente sin importar en qué
+    # zona horaria esté el servidor (Render) vs. el operario.
     fecha = db.Column(db.DateTime, default=datetime.utcnow)
     hora_inicio = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     hora_fin = db.Column(db.DateTime, nullable=True)
@@ -347,9 +346,9 @@ class Produccion(db.Model):
             'unidades_defectuosas': self.unidades_defectuosas,
             'porcentaje_calidad': porcentaje_calidad,
             'observacion_calidad': self.observacion_calidad,
-            'fecha': to_iso_utc(self.fecha),
-            'hora_inicio': to_iso_utc(self.hora_inicio),
-            'hora_fin': to_iso_utc(self.hora_fin),
+            'fecha': self.fecha.isoformat() + 'Z' if self.fecha else None,
+            'hora_inicio': (self.hora_inicio.isoformat() + 'Z') if self.hora_inicio else None,
+            'hora_fin': (self.hora_fin.isoformat() + 'Z') if self.hora_fin else None,
             'duracion_segundos': self.duracion_segundos,
             'duracion_formateada': formatear_duracion(self.duracion_segundos),
             'estado': self.estado,
@@ -425,7 +424,7 @@ def registrar_salida_inventario(nombre_material: str, cantidad: float, referenci
             conn.close()
             return {'ok': False, 'mensaje': f'"{nombre_material}" no encontrado en inventario'}
         material_id = row[0]
-        ahora = to_iso_utc(datetime.utcnow())
+        ahora = datetime.now().isoformat()
         cursor.execute("""
             INSERT INTO movimientos
                 (material_id, tipo, cantidad, fecha, referencia, descripcion, usuario, created_at)
@@ -740,22 +739,15 @@ def pedidos_route():
                          f'(tiene {len(detalles_pedido)}).'
             }), 400
 
-        fecha_entrega = None
-        if data.get('fecha_entrega_solicitada'):
-            val = data['fecha_entrega_solicitada']
-            if isinstance(val, str):
-                val = val.replace('Z', '+00:00')
-            dt_ent = datetime.fromisoformat(val)
-            if dt_ent.tzinfo is not None:
-                dt_ent = dt_ent.astimezone(timezone.utc).replace(tzinfo=None)
-            fecha_entrega = dt_ent
-
         nuevo_pedido = Pedido(
             numero_pedido=generar_numero_pedido(),
             cliente=data.get('cliente'),
             tipo_balon_id=primer_tipo_balon_id,
             cantidad_balones=cantidad_balones_total,
-            fecha_entrega_solicitada=fecha_entrega,
+            fecha_entrega_solicitada=(
+                datetime.fromisoformat(data['fecha_entrega_solicitada'])
+                if data.get('fecha_entrega_solicitada') else None
+            ),
             observaciones=detalles_pedido,
             estado='pendiente'
         )
@@ -1044,6 +1036,252 @@ def dashboard():
             'calidad': porcentaje_calidad_global if porcentaje_calidad_global is not None else 98.2
         }
     })
+
+
+# ============================================================================
+# REPORTES DE PRODUCCIÓN Y CALIDAD (Excel / PDF)
+# ============================================================================
+
+ENCABEZADOS_REPORTE = [
+    'Fecha', 'N° Pedido', 'Operario', 'Tarea',
+    'Hora inicio', 'Hora fin', 'Duración',
+    'Unid. buenas', 'Unid. defectuosas', '% Calidad'
+]
+
+
+def _rango_fechas_reporte(args):
+    """
+    Convierte 'fecha_inicio' y 'fecha_fin' (formato 'YYYY-MM-DD', como
+    entrega un <input type="date">) en un rango datetime completo
+    (00:00:00 a 23:59:59) para filtrar por hora_inicio.
+    """
+    fecha_inicio_str = args.get('fecha_inicio')
+    fecha_fin_str = args.get('fecha_fin')
+    if not fecha_inicio_str or not fecha_fin_str:
+        raise ValueError('Debe indicar fecha de inicio y fecha de fin')
+    try:
+        inicio = datetime.strptime(fecha_inicio_str, '%Y-%m-%d')
+        fin = datetime.strptime(fecha_fin_str, '%Y-%m-%d').replace(hour=23, minute=59, second=59)
+    except ValueError:
+        raise ValueError('Formato de fecha inválido, use AAAA-MM-DD')
+    if inicio > fin:
+        raise ValueError('La fecha de inicio no puede ser posterior a la fecha de fin')
+    return inicio, fin
+
+
+def _registros_para_reporte():
+    """
+    Filtra tareas FINALIZADAS por rango de fechas (sobre hora_inicio) y,
+    opcionalmente, por operario y/o tarea (query params operario_id /
+    tarea_id). Se usa tanto para el export a Excel como a PDF, para que
+    ambos formatos muestren siempre los mismos datos.
+    """
+    inicio, fin = _rango_fechas_reporte(request.args)
+
+    query = Produccion.query.filter(
+        Produccion.estado == 'finalizada',
+        Produccion.hora_inicio >= inicio,
+        Produccion.hora_inicio <= fin
+    )
+
+    operario_id = request.args.get('operario_id')
+    if operario_id:
+        query = query.filter(Produccion.operario_id == int(operario_id))
+
+    tarea_id = request.args.get('tarea_id')
+    if tarea_id:
+        query = query.filter(Produccion.tarea_id == int(tarea_id))
+
+    return query.order_by(Produccion.hora_inicio.asc()).all(), inicio, fin
+
+
+def _fila_reporte(r):
+    """Una fila de datos, en el orden pedido por el escenario Gherkin."""
+    duracion = formatear_duracion(r.duracion_segundos) or '-'
+    buenas = r.unidades_buenas or 0
+    defectuosas = r.unidades_defectuosas or 0
+    total = buenas + defectuosas
+    porcentaje = round((buenas / total) * 100, 1) if total > 0 else None
+    return [
+        r.hora_inicio.strftime('%d/%m/%Y') if r.hora_inicio else '-',
+        r.pedido.numero_pedido if r.pedido else '-',
+        r.operario.nombre if r.operario else '-',
+        r.tarea.nombre if r.tarea else '-',
+        r.hora_inicio.strftime('%H:%M:%S') if r.hora_inicio else '-',
+        r.hora_fin.strftime('%H:%M:%S') if r.hora_fin else '-',
+        duracion,
+        buenas,
+        defectuosas,
+        f'{porcentaje}%' if porcentaje is not None else '-'
+    ]
+
+
+@app.route('/api/reportes/produccion/excel', methods=['GET'])
+def reporte_produccion_excel():
+    """
+    Escenario: 'Exportación exitosa del reporte de producción a Excel'.
+    Genera y descarga un .xlsx con el historial de tareas finalizadas
+    del rango de fechas (y filtros de operario/tarea) seleccionados.
+    """
+    try:
+        registros, inicio, fin = _registros_para_reporte()
+    except ValueError as ve:
+        return jsonify({'error': str(ve)}), 400
+
+    if not registros:
+        return jsonify({'error': 'No existen registros de producción para el periodo seleccionado'}), 404
+
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment
+
+    color_primario = 'FF164D63'   # mismo azul corporativo TRILAK del frontend
+    color_secundario = 'FFFF6B35'
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'Reporte Producción'
+
+    ws.merge_cells('A1:J1')
+    ws['A1'] = 'TRILAK — Reporte de Producción y Calidad'
+    ws['A1'].font = Font(bold=True, size=14, color=color_primario)
+
+    ws.merge_cells('A2:J2')
+    ws['A2'] = (f"Periodo: {inicio.strftime('%d/%m/%Y')} — {fin.strftime('%d/%m/%Y')}   ·   "
+                f"Generado: {datetime.utcnow().strftime('%d/%m/%Y %H:%M')} UTC")
+    ws['A2'].font = Font(italic=True, size=10, color='FF666666')
+
+    fila_encabezado = 4
+    for col, titulo in enumerate(ENCABEZADOS_REPORTE, start=1):
+        celda = ws.cell(row=fila_encabezado, column=col, value=titulo)
+        celda.font = Font(bold=True, color='FFFFFFFF')
+        celda.fill = PatternFill('solid', fgColor=color_primario)
+        celda.alignment = Alignment(horizontal='center')
+
+    fila = fila_encabezado + 1
+    total_buenas = total_defectuosas = 0
+    for r in registros:
+        for col, valor in enumerate(_fila_reporte(r), start=1):
+            ws.cell(row=fila, column=col, value=valor)
+        total_buenas += r.unidades_buenas or 0
+        total_defectuosas += r.unidades_defectuosas or 0
+        fila += 1
+
+    fila += 1
+    ws.cell(row=fila, column=3, value='TOTALES').font = Font(bold=True)
+    ws.cell(row=fila, column=8, value=total_buenas).font = Font(bold=True)
+    ws.cell(row=fila, column=9, value=total_defectuosas).font = Font(bold=True)
+    total_gral = total_buenas + total_defectuosas
+    calidad_gral = round((total_buenas / total_gral) * 100, 1) if total_gral else 0
+    ws.cell(row=fila, column=10, value=f'{calidad_gral}%').font = Font(bold=True, color=color_secundario)
+
+    anchos = [12, 12, 24, 20, 12, 12, 12, 13, 16, 11]
+    for i, ancho in enumerate(anchos, start=1):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = ancho
+
+    buffer = BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+
+    nombre_archivo = f"reporte_produccion_{inicio.strftime('%Y%m%d')}_{fin.strftime('%Y%m%d')}.xlsx"
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name=nombre_archivo,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+
+
+@app.route('/api/reportes/produccion/pdf', methods=['GET'])
+def reporte_produccion_pdf():
+    """
+    Escenario: 'Exportación de reporte consolidado a PDF'.
+    Compila las métricas del periodo (resumen + detalle por tarea) en
+    un PDF descargable con diseño formal de reporte corporativo.
+    """
+    try:
+        registros, inicio, fin = _registros_para_reporte()
+    except ValueError as ve:
+        return jsonify({'error': str(ve)}), 400
+
+    if not registros:
+        return jsonify({'error': 'No existen registros de producción para el periodo seleccionado'}), 404
+
+    from reportlab.lib.pagesizes import landscape, letter
+    from reportlab.lib import colors as rl_colors
+    from reportlab.lib.units import cm
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+
+    color_primario = rl_colors.HexColor('#164d63')
+    color_secundario = rl_colors.HexColor('#FF6B35')
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=landscape(letter),
+        topMargin=1.5 * cm, bottomMargin=1.5 * cm,
+        leftMargin=1.5 * cm, rightMargin=1.5 * cm
+    )
+
+    estilos = getSampleStyleSheet()
+    estilo_titulo = ParagraphStyle('TituloTrilak', parent=estilos['Heading1'],
+                                    textColor=color_primario, fontSize=18, spaceAfter=4)
+    estilo_subtitulo = ParagraphStyle('SubtituloTrilak', parent=estilos['Normal'],
+                                       textColor=rl_colors.HexColor('#666666'), fontSize=10, spaceAfter=14)
+    estilo_seccion = ParagraphStyle('SeccionTrilak', parent=estilos['Heading2'],
+                                     textColor=color_primario, fontSize=12, spaceBefore=14, spaceAfter=8)
+
+    elementos = [
+        Paragraph('TRILAK — Reporte de Producción y Calidad', estilo_titulo),
+        Paragraph(
+            f"Periodo: {inicio.strftime('%d/%m/%Y')} — {fin.strftime('%d/%m/%Y')} &nbsp;|&nbsp; "
+            f"Generado: {datetime.utcnow().strftime('%d/%m/%Y %H:%M')} UTC",
+            estilo_subtitulo
+        )
+    ]
+
+    total_buenas = sum(r.unidades_buenas or 0 for r in registros)
+    total_defectuosas = sum(r.unidades_defectuosas or 0 for r in registros)
+    total_unidades = total_buenas + total_defectuosas
+    calidad_global = round((total_buenas / total_unidades) * 100, 1) if total_unidades else 0
+    duracion_total_seg = sum(r.duracion_segundos or 0 for r in registros)
+
+    elementos.append(Paragraph('Resumen del periodo', estilo_seccion))
+    resumen_datos = [
+        ['Tareas finalizadas', str(len(registros))],
+        ['Unidades buenas', str(total_buenas)],
+        ['Unidades defectuosas', str(total_defectuosas)],
+        ['% Calidad global', f'{calidad_global}%'],
+        ['Tiempo total registrado', formatear_duracion(duracion_total_seg) or '0s'],
+    ]
+    tabla_resumen = Table(resumen_datos, colWidths=[6 * cm, 4 * cm])
+    tabla_resumen.setStyle(TableStyle([
+        ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+        ('TEXTCOLOR', (0, 0), (0, -1), color_primario),
+        ('FONTSIZE', (0, 0), (-1, -1), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ('LINEBELOW', (0, 0), (-1, -1), 0.5, rl_colors.HexColor('#e0e0e0')),
+    ]))
+    elementos.append(tabla_resumen)
+
+    elementos.append(Paragraph('Detalle por tarea', estilo_seccion))
+    datos_tabla = [ENCABEZADOS_REPORTE] + [_fila_reporte(r) for r in registros]
+    tabla = Table(datos_tabla, repeatRows=1)
+    tabla.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), color_primario),
+        ('TEXTCOLOR', (0, 0), (-1, 0), rl_colors.white),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 8),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('GRID', (0, 0), (-1, -1), 0.4, rl_colors.HexColor('#e0e0e0')),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [rl_colors.white, rl_colors.HexColor('#f5f5f5')]),
+    ]))
+    elementos.append(tabla)
+
+    doc.build(elementos)
+    buffer.seek(0)
+
+    nombre_archivo = f"reporte_produccion_{inicio.strftime('%Y%m%d')}_{fin.strftime('%Y%m%d')}.pdf"
+    return send_file(buffer, as_attachment=True, download_name=nombre_archivo, mimetype='application/pdf')
 
 
 # ── ARRANQUE ──────────────────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 
 const API_BASE_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
@@ -13,6 +13,21 @@ const COLORS = {
   danger: '#2199d11c',
   light: '#f5f5f5',
   border: '#e0e0e0'
+};
+
+// Convierte segundos totales en 'Hh Mm Ss' legible. Se usa en la vista de
+// Reportes para mostrar tiempos acumulados sin depender de otro componente.
+const formatearDuracionLegible = (segundosTotales) => {
+  if (!segundosTotales || segundosTotales <= 0) return '0s';
+  const s = Math.floor(segundosTotales);
+  const horas = Math.floor(s / 3600);
+  const minutos = Math.floor((s % 3600) / 60);
+  const seg = s % 60;
+  const partes = [];
+  if (horas) partes.push(`${horas}h`);
+  if (minutos || horas) partes.push(`${minutos}m`);
+  partes.push(`${seg}s`);
+  return partes.join(' ');
 };
 
 export default function App() {
@@ -480,6 +495,210 @@ export default function App() {
     </div>
   );
 
+  const ReportesView = () => {
+    const hoy = new Date().toISOString().slice(0, 10);
+    const hace7dias = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+    const [filtros, setFiltros] = useState({
+      fecha_inicio: hace7dias,
+      fecha_fin: hoy,
+      operario_id: '',
+      tarea_id: ''
+    });
+    const [exportando, setExportando] = useState(null); // null | 'excel' | 'pdf'
+
+    // Escenario: 'ha visualizado las métricas de rendimiento en pantalla
+    // para un periodo determinado'. Se calcula en el cliente a partir de
+    // los registros ya cargados, filtrando por fecha/operario/tarea, para
+    // que el usuario vea el resumen ANTES de exportar.
+    const registrosFiltrados = useMemo(() => {
+      if (!filtros.fecha_inicio || !filtros.fecha_fin) return [];
+      const desde = new Date(filtros.fecha_inicio + 'T00:00:00');
+      const hasta = new Date(filtros.fecha_fin + 'T23:59:59');
+      return produccion.filter(p => {
+        if (p.estado !== 'finalizada' || !p.hora_inicio) return false;
+        const inicioTarea = new Date(p.hora_inicio);
+        if (inicioTarea < desde || inicioTarea > hasta) return false;
+        if (filtros.operario_id && String(p.operario_id) !== String(filtros.operario_id)) return false;
+        if (filtros.tarea_id && String(p.tarea_id) !== String(filtros.tarea_id)) return false;
+        return true;
+      });
+    }, [produccion, filtros]);
+
+    const resumen = useMemo(() => {
+      const buenas = registrosFiltrados.reduce((acc, p) => acc + (p.unidades_buenas || 0), 0);
+      const defectuosas = registrosFiltrados.reduce((acc, p) => acc + (p.unidades_defectuosas || 0), 0);
+      const total = buenas + defectuosas;
+      const duracionTotal = registrosFiltrados.reduce((acc, p) => acc + (p.duracion_segundos || 0), 0);
+      return {
+        tareas: registrosFiltrados.length,
+        buenas,
+        defectuosas,
+        calidad: total > 0 ? Math.round((buenas / total) * 1000) / 10 : null,
+        duracionTotal
+      };
+    }, [registrosFiltrados]);
+
+    const exportarArchivo = async (formato) => {
+      if (!filtros.fecha_inicio || !filtros.fecha_fin) {
+        alert('Seleccione un rango de fechas');
+        return;
+      }
+      // Escenario: 'Validación de periodo sin registros de producción'.
+      if (registrosFiltrados.length === 0) {
+        alert('⚠️ No existen registros de producción para el periodo seleccionado');
+        return;
+      }
+
+      setExportando(formato);
+      try {
+        const params = new URLSearchParams({
+          fecha_inicio: filtros.fecha_inicio,
+          fecha_fin: filtros.fecha_fin
+        });
+        if (filtros.operario_id) params.append('operario_id', filtros.operario_id);
+        if (filtros.tarea_id) params.append('tarea_id', filtros.tarea_id);
+
+        const res = await fetch(`${API_BASE_URL}/reportes/produccion/${formato}?${params.toString()}`);
+
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          alert('⚠️ ' + (data.error || 'No se pudo generar el reporte'));
+          return;
+        }
+
+        const blob = await res.blob();
+        const extension = formato === 'excel' ? 'xlsx' : 'pdf';
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `reporte_produccion_${filtros.fecha_inicio}_${filtros.fecha_fin}.${extension}`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+      } catch (error) {
+        alert('❌ Error al exportar: ' + error.message);
+      } finally {
+        setExportando(null);
+      }
+    };
+
+    return (
+      <div style={{ padding: '30px' }}>
+        <h1 style={{ fontSize: '28px', color: COLORS.primary, marginBottom: '30px' }}>
+          📈 Reportes de Producción y Calidad
+        </h1>
+
+        <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '8px', marginBottom: '20px' }}>
+          <h2 style={{ fontSize: '18px', color: COLORS.primary, marginBottom: '15px' }}>Filtros</h2>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px', marginBottom: '10px' }}>
+            <div>
+              <label style={{ fontSize: '13px', color: '#666' }}>Desde</label>
+              <input
+                type="date"
+                value={filtros.fecha_inicio}
+                max={filtros.fecha_fin}
+                onChange={(e) => setFiltros({ ...filtros, fecha_inicio: e.target.value })}
+                style={{ width: '100%', padding: '10px', marginTop: '4px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}
+              />
+            </div>
+            <div>
+              <label style={{ fontSize: '13px', color: '#666' }}>Hasta</label>
+              <input
+                type="date"
+                value={filtros.fecha_fin}
+                min={filtros.fecha_inicio}
+                onChange={(e) => setFiltros({ ...filtros, fecha_fin: e.target.value })}
+                style={{ width: '100%', padding: '10px', marginTop: '4px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}
+              />
+            </div>
+            <div>
+              <label style={{ fontSize: '13px', color: '#666' }}>Operario (opcional)</label>
+              <select
+                value={filtros.operario_id}
+                onChange={(e) => setFiltros({ ...filtros, operario_id: e.target.value })}
+                style={{ width: '100%', padding: '10px', marginTop: '4px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}
+              >
+                <option value="">-- Todos los operarios --</option>
+                {operarios.map(op => (
+                  <option key={op.id} value={op.id}>{op.nombre}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label style={{ fontSize: '13px', color: '#666' }}>Tarea (opcional)</label>
+              <select
+                value={filtros.tarea_id}
+                onChange={(e) => setFiltros({ ...filtros, tarea_id: e.target.value })}
+                style={{ width: '100%', padding: '10px', marginTop: '4px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}
+              >
+                <option value="">-- Todas las tareas --</option>
+                {tareas.map(t => (
+                  <option key={t.id} value={t.id}>{t.nombre}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <h2 style={{ fontSize: '18px', color: COLORS.primary, marginBottom: '15px' }}>
+          Vista previa del periodo
+        </h2>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '15px', marginBottom: '25px' }}>
+          <div style={{ backgroundColor: 'white', padding: '15px', borderRadius: '8px', borderLeft: `5px solid ${COLORS.primary}` }}>
+            <p style={{ margin: 0, fontSize: '13px', color: '#666' }}>Tareas finalizadas</p>
+            <p style={{ margin: '4px 0 0 0', fontSize: '26px', fontWeight: 'bold', color: COLORS.primary }}>{resumen.tareas}</p>
+          </div>
+          <div style={{ backgroundColor: 'white', padding: '15px', borderRadius: '8px', borderLeft: '5px solid #2e7d32' }}>
+            <p style={{ margin: 0, fontSize: '13px', color: '#666' }}>Unidades buenas</p>
+            <p style={{ margin: '4px 0 0 0', fontSize: '26px', fontWeight: 'bold', color: '#2e7d32' }}>{resumen.buenas}</p>
+          </div>
+          <div style={{ backgroundColor: 'white', padding: '15px', borderRadius: '8px', borderLeft: `5px solid ${COLORS.warning}` }}>
+            <p style={{ margin: 0, fontSize: '13px', color: '#666' }}>Unidades defectuosas</p>
+            <p style={{ margin: '4px 0 0 0', fontSize: '26px', fontWeight: 'bold', color: COLORS.warning }}>{resumen.defectuosas}</p>
+          </div>
+          <div style={{ backgroundColor: 'white', padding: '15px', borderRadius: '8px', borderLeft: `5px solid ${COLORS.success}` }}>
+            <p style={{ margin: 0, fontSize: '13px', color: '#666' }}>% Calidad</p>
+            <p style={{ margin: '4px 0 0 0', fontSize: '26px', fontWeight: 'bold', color: COLORS.success }}>
+              {resumen.calidad !== null ? `${resumen.calidad}%` : '—'}
+            </p>
+          </div>
+          <div style={{ backgroundColor: 'white', padding: '15px', borderRadius: '8px', borderLeft: `5px solid ${COLORS.secondary}` }}>
+            <p style={{ margin: 0, fontSize: '13px', color: '#666' }}>Tiempo total</p>
+            <p style={{ margin: '4px 0 0 0', fontSize: '20px', fontWeight: 'bold', color: COLORS.secondary }}>
+              {formatearDuracionLegible(resumen.duracionTotal)}
+            </p>
+          </div>
+        </div>
+
+        {registrosFiltrados.length === 0 && (
+          <p style={{ fontSize: '14px', color: '#999', marginBottom: '20px' }}>
+            📭 No hay tareas finalizadas en el periodo/filtros seleccionados.
+          </p>
+        )}
+
+        <div style={{ display: 'flex', gap: '15px', flexWrap: 'wrap' }}>
+          <button
+            onClick={() => exportarArchivo('excel')}
+            disabled={exportando !== null}
+            style={{ padding: '14px 24px', backgroundColor: COLORS.success, color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
+          >
+            {exportando === 'excel' ? 'Generando...' : '📊 Exportar a Excel'}
+          </button>
+          <button
+            onClick={() => exportarArchivo('pdf')}
+            disabled={exportando !== null}
+            style={{ padding: '14px 24px', backgroundColor: COLORS.primary, color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
+          >
+            {exportando === 'pdf' ? 'Generando...' : '📄 Exportar a PDF'}
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   const TiposView = () => {
     const [tipoSeleccionado, setTipoSeleccionado] = useState(null);
 
@@ -886,6 +1105,7 @@ export default function App() {
             { id: 'dashboard', label: 'Dashboard', icon: '📊' },
             { id: 'pedidos', label: 'Pedidos', icon: '📋' },
             { id: 'produccion', label: 'Producción', icon: '📝' },
+            { id: 'reportes', label: 'Reportes', icon: '📈' },
             { id: 'tipos', label: 'Tipos Balón', icon: '⚽' },
             { id: 'operarios', label: 'Operarios', icon: '👥' },
             { id: 'materiales', label: 'Inventario', icon: '📦' },
@@ -903,6 +1123,7 @@ export default function App() {
             {currentView === 'dashboard' && '📊 Dashboard'}
             {currentView === 'pedidos' && '📋 Pedidos'}
             {currentView === 'produccion' && '📝 Producción'}
+            {currentView === 'reportes' && '📈 Reportes'}
             {currentView === 'tipos' && '⚽ Tipos de Balones'}
             {currentView === 'operarios' && '👥 Operarios'}
             {currentView === 'materiales' && '📦 Inventario'}
@@ -920,6 +1141,7 @@ export default function App() {
               {currentView === 'dashboard' && <DashboardView />}
               {currentView === 'pedidos' && <PedidosView />}
               {currentView === 'produccion' && <ProduccionView />}
+              {currentView === 'reportes' && <ReportesView />}
               {currentView === 'tipos' && <TiposView />}
               {currentView === 'operarios' && <OperariosView />}
               {currentView === 'materiales' && <MaterialesView />}
