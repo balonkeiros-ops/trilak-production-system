@@ -523,7 +523,7 @@ export default function App() {
         if (filtros.tarea_id && String(p.tarea_id) !== String(filtros.tarea_id)) return false;
         return true;
       });
-    }, [produccion, filtros]);
+    }, [filtros]);
 
     const resumen = useMemo(() => {
       const buenas = registrosFiltrados.reduce((acc, p) => acc + (p.unidades_buenas || 0), 0);
