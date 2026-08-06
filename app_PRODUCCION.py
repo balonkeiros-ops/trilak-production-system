@@ -291,19 +291,26 @@ class MaterialPedido(db.Model):
 class Produccion(db.Model):
     """
     Registro de trabajo por ciclo: qué operario hizo qué tarea, en qué
-    pedido, entre qué hora de inicio y qué hora de fin. La tarea se
-    elige en el momento del registro — los operarios son polivalentes.
+    pedido, entre qué hora de inicio y qué hora de fin, y el desglose de
+    calidad (unidades conformes vs. defectuosas) al cerrar la tarea.
 
     Ciclo de vida de un registro:
       1) POST /api/produccion/iniciar   -> estado='en_progreso', hora_inicio=ahora, hora_fin=None
       2) PATCH /api/produccion/<id>/finalizar -> estado='finalizada', hora_fin=ahora,
-         cantidad=unidades procesadas, duracion_segundos=hora_fin - hora_inicio
+         unidades_buenas + unidades_defectuosas (cantidad = suma de ambas),
+         duracion_segundos=hora_fin - hora_inicio
     """
     id = db.Column(db.Integer, primary_key=True)
     operario_id = db.Column(db.Integer, db.ForeignKey('operario.id'), nullable=False)
     tarea_id = db.Column(db.Integer, db.ForeignKey('tarea.id'), nullable=False)
     pedido_id = db.Column(db.Integer, db.ForeignKey('pedido.id'), nullable=True)
+    # 'cantidad' se conserva por compatibilidad: total de unidades procesadas
+    # (buenas + defectuosas). La fuente de verdad del desglose de calidad
+    # son las dos columnas de abajo.
     cantidad = db.Column(db.Float, default=0)
+    unidades_buenas = db.Column(db.Integer, nullable=True)
+    unidades_defectuosas = db.Column(db.Integer, nullable=True)
+    observacion_calidad = db.Column(db.Text)
     # 'fecha' se conserva por compatibilidad con pantallas/ordenamientos
     # antiguos: siempre refleja el momento de inicio de la tarea.
     fecha = db.Column(db.DateTime, default=datetime.now)
@@ -318,6 +325,9 @@ class Produccion(db.Model):
     pedido = db.relationship('Pedido')
 
     def to_dict(self):
+        porcentaje_calidad = None
+        if self.cantidad and self.cantidad > 0 and self.unidades_buenas is not None:
+            porcentaje_calidad = round((self.unidades_buenas / self.cantidad) * 100, 1)
         return {
             'id': self.id,
             'operario_id': self.operario_id,
@@ -327,6 +337,10 @@ class Produccion(db.Model):
             'pedido_id': self.pedido_id,
             'pedido_numero': self.pedido.numero_pedido if self.pedido else None,
             'cantidad': self.cantidad,
+            'unidades_buenas': self.unidades_buenas,
+            'unidades_defectuosas': self.unidades_defectuosas,
+            'porcentaje_calidad': porcentaje_calidad,
+            'observacion_calidad': self.observacion_calidad,
             'fecha': self.fecha.isoformat(),
             'hora_inicio': self.hora_inicio.isoformat() if self.hora_inicio else None,
             'hora_fin': self.hora_fin.isoformat() if self.hora_fin else None,
@@ -913,10 +927,12 @@ def iniciar_tarea():
 @app.route('/api/produccion/<int:produccion_id>/finalizar', methods=['PATCH'])
 def finalizar_tarea(produccion_id):
     """
-    Escenario: 'Registro exitoso del ciclo de una tarea de producción' (paso 2).
-    El operario ingresa las unidades procesadas y pulsa "Finalizar Tarea".
-    El sistema calcula el tiempo total transcurrido desde el inicio y
-    almacena el registro (vinculado al pedido) para métricas posteriores.
+    Escenario: 'Finalización de tarea con desglose de unidades conformes y
+    defectuosas'. El operario ingresa unidades buenas + unidades
+    defectuosas (y una observación opcional) al finalizar. El sistema
+    calcula el tiempo total transcurrido y guarda el desglose de calidad
+    vinculado al operario, la tarea y el pedido, para alimentar los
+    indicadores de calidad del panel de control.
     """
     try:
         registro = Produccion.query.get_or_404(produccion_id)
@@ -925,19 +941,30 @@ def finalizar_tarea(produccion_id):
             return jsonify({'error': 'Esta tarea ya fue finalizada'}), 400
 
         data = request.json or {}
-        cantidad = data.get('cantidad')
-        if cantidad is None:
-            return jsonify({'error': 'Debe indicar el número de unidades procesadas'}), 400
+
+        def _entero_no_negativo(valor, nombre_campo):
+            if valor is None or valor == '':
+                raise ValueError(f'Debe indicar la cantidad de "{nombre_campo}"')
+            try:
+                numero = int(valor)
+            except (TypeError, ValueError):
+                raise ValueError(f'Cantidad inválida para "{nombre_campo}"')
+            if numero < 0:
+                raise ValueError(f'"{nombre_campo}" no puede ser negativo')
+            return numero
+
         try:
-            cantidad = float(cantidad)
-        except (TypeError, ValueError):
-            return jsonify({'error': 'Cantidad inválida'}), 400
-        if cantidad < 0:
-            return jsonify({'error': 'La cantidad no puede ser negativa'}), 400
+            unidades_buenas = _entero_no_negativo(data.get('unidades_buenas'), 'unidades buenas')
+            unidades_defectuosas = _entero_no_negativo(data.get('unidades_defectuosas'), 'unidades defectuosas')
+        except ValueError as ve:
+            return jsonify({'error': str(ve)}), 400
 
         ahora = datetime.now()
         registro.hora_fin = ahora
-        registro.cantidad = cantidad
+        registro.unidades_buenas = unidades_buenas
+        registro.unidades_defectuosas = unidades_defectuosas
+        registro.cantidad = unidades_buenas + unidades_defectuosas
+        registro.observacion_calidad = data.get('observacion_calidad', '')
         registro.duracion_segundos = int((ahora - registro.hora_inicio).total_seconds())
         registro.estado = 'finalizada'
         if data.get('observaciones'):
@@ -976,6 +1003,14 @@ def produccion_por_operario(operario_id):
 @app.route('/api/dashboard', methods=['GET'])
 def dashboard():
     """Retorna métricas para el panel de control."""
+    registros_finalizados = Produccion.query.filter_by(estado='finalizada').all()
+    total_buenas = sum(r.unidades_buenas or 0 for r in registros_finalizados)
+    total_defectuosas = sum(r.unidades_defectuosas or 0 for r in registros_finalizados)
+    total_procesadas = total_buenas + total_defectuosas
+    porcentaje_calidad_global = (
+        round((total_buenas / total_procesadas) * 100, 1) if total_procesadas > 0 else None
+    )
+
     return jsonify({
         'metricas': {
             'total_pedidos': Pedido.query.count(),
@@ -989,7 +1024,11 @@ def dashboard():
             'total_registros_produccion': Produccion.query.count(),
             'produccion_promedio': 6975,
             'utilizacion': 99.6,
-            'calidad': 98.2
+            # Indicadores de calidad calculados sobre el desglose
+            # unidades_buenas / unidades_defectuosas de cada tarea finalizada.
+            'total_unidades_buenas': total_buenas,
+            'total_unidades_defectuosas': total_defectuosas,
+            'calidad': porcentaje_calidad_global if porcentaje_calidad_global is not None else 98.2
         }
     })
 
@@ -1000,12 +1039,10 @@ def dashboard():
 # lo que usa Render según el Procfile). Antes solo estaba dentro de
 # "if __name__ == '__main__'", así que en Render nunca se creaban las tablas
 # ni se cargaban los tipos de balón / operarios / tareas / materiales.
-
-    with app.app_context():
-        db.drop_all()  # <--- Agrega esto temporalmente para borrar la tabla vieja
-        db.create_all()
-        inicializar_datos()
-        cargar_materiales_sgii()
+with app.app_context():
+    db.create_all()
+    inicializar_datos()
+    cargar_materiales_sgii()
 
 
 if __name__ == '__main__':

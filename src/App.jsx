@@ -171,6 +171,19 @@ export default function App() {
         <Card titulo="Tipos de Balón" valor={metricas?.metricas?.total_tipos_balon || 0} color={COLORS.warning} />
       </div>
 
+      <h2 style={{ fontSize: '18px', color: COLORS.primary, marginBottom: '15px' }}>
+        🔍 Indicadores de calidad
+      </h2>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '20px', marginBottom: '30px' }}>
+        <Card
+          titulo="% Calidad global"
+          valor={metricas?.metricas?.calidad != null ? `${metricas.metricas.calidad}%` : '—'}
+          color={COLORS.success}
+        />
+        <Card titulo="Unidades buenas" valor={metricas?.metricas?.total_unidades_buenas ?? 0} color={COLORS.success} />
+        <Card titulo="Unidades defectuosas" valor={metricas?.metricas?.total_unidades_defectuosas ?? 0} color={COLORS.warning} />
+      </div>
+
       <button onClick={exportarExcel} style={{ padding: '12px 20px', backgroundColor: COLORS.primary, color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold', marginBottom: '20px' }}>
         📊 Descargar Excel
       </button>
@@ -539,7 +552,10 @@ export default function App() {
     // Tarea actualmente "en_progreso" (viene del backend al iniciar, o se
     // restaura al elegir un operario que ya tenía una tarea abierta).
     const [tareaActiva, setTareaActiva] = useState(null);
-    const [unidades, setUnidades] = useState('');
+    const [mostrarCierre, setMostrarCierre] = useState(false);
+    const [unidadesBuenas, setUnidadesBuenas] = useState('');
+    const [unidadesDefectuosas, setUnidadesDefectuosas] = useState('');
+    const [observacionCalidad, setObservacionCalidad] = useState('');
     const [cronometro, setCronometro] = useState('00:00:00');
     const [cargandoAccion, setCargandoAccion] = useState(false);
 
@@ -594,7 +610,7 @@ export default function App() {
         const data = await res.json();
         if (res.ok) {
           setTareaActiva(data);
-          setUnidades('');
+          setMostrarCierre(false);
         } else if (res.status === 409 && data.tarea_en_progreso) {
           // El operario ya tenía una tarea abierta: se restaura en vez de duplicar.
           alert(data.error);
@@ -609,9 +625,25 @@ export default function App() {
       }
     };
 
+    // Paso "hace clic en el botón de finalizar la labor": despliega el
+    // formulario de cierre con los campos de unidades buenas/defectuosas.
+    const abrirFormularioCierre = () => {
+      setUnidadesBuenas('');
+      setUnidadesDefectuosas('');
+      setObservacionCalidad('');
+      setMostrarCierre(true);
+    };
+
+    const totalUnidadesCierre =
+      (Number(unidadesBuenas) || 0) + (Number(unidadesDefectuosas) || 0);
+
     const finalizarTarea = async () => {
-      if (unidades === '' || Number(unidades) < 0) {
-        alert('Ingrese el número de unidades procesadas');
+      if (unidadesBuenas === '' || Number(unidadesBuenas) < 0) {
+        alert('Ingrese la cantidad de unidades buenas (aprobadas)');
+        return;
+      }
+      if (unidadesDefectuosas === '' || Number(unidadesDefectuosas) < 0) {
+        alert('Ingrese la cantidad de unidades defectuosas');
         return;
       }
       setCargandoAccion(true);
@@ -619,14 +651,24 @@ export default function App() {
         const res = await fetch(`${API_BASE_URL}/produccion/${tareaActiva.id}/finalizar`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ cantidad: Number(unidades) })
+          body: JSON.stringify({
+            unidades_buenas: Number(unidadesBuenas),
+            unidades_defectuosas: Number(unidadesDefectuosas),
+            observacion_calidad: observacionCalidad
+          })
         });
         const data = await res.json();
         if (res.ok) {
-          alert(`✅ Tarea finalizada. Tiempo total: ${data.duracion_formateada}`);
+          const resumenCalidad = data.porcentaje_calidad !== null
+            ? ` · Calidad: ${data.porcentaje_calidad}%`
+            : '';
+          alert(`✅ Tarea finalizada. Tiempo total: ${data.duracion_formateada}${resumenCalidad}`);
           await cargarDatos();
           setTareaActiva(null);
-          setUnidades('');
+          setMostrarCierre(false);
+          setUnidadesBuenas('');
+          setUnidadesDefectuosas('');
+          setObservacionCalidad('');
           setForm({ operario_id: '', tarea_id: '', pedido_id: '' });
         } else {
           alert('❌ ' + (data.error || 'Error al finalizar la tarea'));
@@ -704,23 +746,77 @@ export default function App() {
                 </p>
               </div>
 
-              <input
-                type="number"
-                min="0"
-                step="1"
-                value={unidades}
-                onChange={(e) => setUnidades(e.target.value)}
-                placeholder="Unidades procesadas"
-                style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}
-              />
+              {!mostrarCierre ? (
+                <button
+                  onClick={abrirFormularioCierre}
+                  disabled={cargandoAccion}
+                  style={{ width: '100%', padding: '12px', backgroundColor: COLORS.secondary, color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
+                >
+                  ⏹️ Finalizar Tarea
+                </button>
+              ) : (
+                <div style={{ border: `2px solid ${COLORS.secondary}`, borderRadius: '6px', padding: '15px' }}>
+                  <h3 style={{ fontSize: '15px', color: COLORS.primary, margin: '0 0 12px 0' }}>
+                    🔍 Cierre de calidad
+                  </h3>
 
-              <button
-                onClick={finalizarTarea}
-                disabled={cargandoAccion}
-                style={{ width: '100%', padding: '12px', backgroundColor: COLORS.secondary, color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
-              >
-                ⏹️ Finalizar Tarea
-              </button>
+                  <label style={{ fontSize: '13px', color: '#666' }}>Unidades buenas (aprobadas)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={unidadesBuenas}
+                    onChange={(e) => setUnidadesBuenas(e.target.value)}
+                    placeholder="0"
+                    style={{ width: '100%', padding: '10px', margin: '4px 0 10px 0', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}
+                  />
+
+                  <label style={{ fontSize: '13px', color: '#666' }}>Unidades defectuosas</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={unidadesDefectuosas}
+                    onChange={(e) => setUnidadesDefectuosas(e.target.value)}
+                    placeholder="0"
+                    style={{ width: '100%', padding: '10px', margin: '4px 0 10px 0', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}
+                  />
+
+                  <label style={{ fontSize: '13px', color: '#666' }}>Observación (opcional)</label>
+                  <textarea
+                    value={observacionCalidad}
+                    onChange={(e) => setObservacionCalidad(e.target.value)}
+                    placeholder="Ej: defectos por costura mal alineada"
+                    style={{ width: '100%', padding: '10px', margin: '4px 0 10px 0', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box', minHeight: '50px' }}
+                  />
+
+                  {(unidadesBuenas !== '' || unidadesDefectuosas !== '') && (
+                    <p style={{ fontSize: '13px', color: '#666', margin: '0 0 10px 0' }}>
+                      Total unidades: <strong>{totalUnidadesCierre}</strong>
+                      {totalUnidadesCierre > 0 && (
+                        <> · Calidad estimada: <strong>{Math.round((Number(unidadesBuenas || 0) / totalUnidadesCierre) * 1000) / 10}%</strong></>
+                      )}
+                    </p>
+                  )}
+
+                  <div style={{ display: 'flex', gap: '10px' }}>
+                    <button
+                      onClick={() => setMostrarCierre(false)}
+                      disabled={cargandoAccion}
+                      style={{ flex: 1, padding: '12px', backgroundColor: 'white', color: COLORS.primary, border: `1px solid ${COLORS.border}`, borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      onClick={finalizarTarea}
+                      disabled={cargandoAccion}
+                      style={{ flex: 2, padding: '12px', backgroundColor: COLORS.success, color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
+                    >
+                      ✅ Confirmar Finalización
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -749,7 +845,23 @@ export default function App() {
                     ⏱️ Duración: {p.duracion_formateada}
                   </p>
                 )}
-                <p style={{ fontSize: '14px', color: '#666', margin: '0' }}>Unidades: {p.cantidad}</p>
+                {p.estado === 'finalizada' && p.unidades_buenas !== null && p.unidades_buenas !== undefined ? (
+                  <>
+                    <p style={{ fontSize: '14px', color: '#2e7d32', margin: '0 0 2px 0' }}>
+                      ✅ Buenas: {p.unidades_buenas} &nbsp; ❌ Defectuosas: {p.unidades_defectuosas}
+                    </p>
+                    <p style={{ fontSize: '14px', fontWeight: 'bold', margin: '0 0 5px 0', color: p.porcentaje_calidad >= 95 ? '#2e7d32' : COLORS.warning }}>
+                      Calidad: {p.porcentaje_calidad}%
+                    </p>
+                    {p.observacion_calidad && (
+                      <p style={{ fontSize: '12px', color: '#999', margin: '0 0 5px 0', fontStyle: 'italic' }}>
+                        “{p.observacion_calidad}”
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <p style={{ fontSize: '14px', color: '#666', margin: '0' }}>Unidades: {p.cantidad}</p>
+                )}
                 {p.pedido_numero && <p style={{ fontSize: '12px', color: '#999', marginTop: '5px' }}>Pedido: {p.pedido_numero}</p>}
               </div>
             ))}
