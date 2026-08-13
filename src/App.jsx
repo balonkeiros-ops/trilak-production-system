@@ -94,7 +94,7 @@ export default function App() {
         ['Tipos de Balón:', metricas?.metricas?.total_tipos_balon || 0],
         ['Producción Promedio:', metricas?.metricas?.produccion_promedio || 0, 'balones/mes'],
         ['Utilización:', metricas?.metricas?.utilizacion || 0, '%'],
-        ['Calidad:', metricas?.metricas?.calidad || 0, '%'],
+        ['Calidad:', (metricas?.metricas?.calidad ?? null) === null ? 'Sin datos' : metricas.metricas.calidad, metricas?.metricas?.calidad != null ? '%' : ''],
       ];
       const ws1 = XLSX.utils.aoa_to_sheet(resumen);
       XLSX.utils.book_append_sheet(wb, ws1, 'Resumen');
@@ -169,6 +169,11 @@ export default function App() {
         <Card titulo="Total Operarios" valor={metricas?.metricas?.total_operarios || 0} color={COLORS.secondary} />
         <Card titulo="Total Materiales" valor={metricas?.metricas?.total_materiales || 0} color={COLORS.success} />
         <Card titulo="Tipos de Balón" valor={metricas?.metricas?.total_tipos_balon || 0} color={COLORS.warning} />
+        <Card
+          titulo="Calidad (buenas/total)"
+          valor={metricas?.metricas?.calidad != null ? `${metricas.metricas.calidad}%` : 'Sin datos'}
+          color={COLORS.success}
+        />
       </div>
 
       <button onClick={exportarExcel} style={{ padding: '12px 20px', backgroundColor: COLORS.primary, color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold', marginBottom: '20px' }}>
@@ -636,22 +641,81 @@ export default function App() {
       operario_id: '',
       tarea_id: '',
       pedido_id: '',
-      cantidad: 1,
+      unidades_buenas: 1,
+      unidades_defectuosas: 0,
       fecha: new Date().toISOString().slice(0, 10),
       observaciones: ''
     });
+
+    // Historia 3: cronómetro por operario/tarea. horaInicioRef guarda el
+    // Date real; segundosTranscurridos solo es para refrescar el texto en
+    // pantalla cada segundo (setInterval no puede leer un useState directo
+    // de forma confiable, por eso el valor real vive en el ref).
+    const [cronometroActivo, setCronometroActivo] = useState(false);
+    const [segundosTranscurridos, setSegundosTranscurridos] = useState(0);
+    const [horaInicioCrono, setHoraInicioCrono] = useState(null);
+    const [horaFinCrono, setHoraFinCrono] = useState(null);
+
+    useEffect(() => {
+      if (!cronometroActivo || !horaInicioCrono) return;
+      const intervalo = setInterval(() => {
+        setSegundosTranscurridos(Math.floor((new Date() - horaInicioCrono) / 1000));
+      }, 1000);
+      return () => clearInterval(intervalo);
+    }, [cronometroActivo, horaInicioCrono]);
+
+    const formatearTiempo = (totalSegundos) => {
+      const h = Math.floor(totalSegundos / 3600);
+      const m = Math.floor((totalSegundos % 3600) / 60);
+      const s = totalSegundos % 60;
+      return h > 0
+        ? `${h}h ${String(m).padStart(2, '0')}m ${String(s).padStart(2, '0')}s`
+        : `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    };
+
+    const iniciarCronometro = () => {
+      if (!form.operario_id || !form.tarea_id) {
+        alert('Selecciona operario y tarea antes de iniciar el cronómetro');
+        return;
+      }
+      const ahora = new Date();
+      setHoraInicioCrono(ahora);
+      setHoraFinCrono(null);
+      setSegundosTranscurridos(0);
+      setCronometroActivo(true);
+    };
+
+    const detenerCronometro = () => {
+      setHoraFinCrono(new Date());
+      setCronometroActivo(false);
+    };
+
+    const totalUnidades = (parseFloat(form.unidades_buenas) || 0) + (parseFloat(form.unidades_defectuosas) || 0);
 
     const registrarProduccion = async () => {
       if (!form.operario_id || !form.tarea_id) {
         alert('Seleccione operario y tarea');
         return;
       }
+      if (totalUnidades <= 0) {
+        alert('Registra al menos una unidad (buena o defectuosa)');
+        return;
+      }
+
+      const payload = { ...form };
+      // Solo se manda hora_inicio/hora_fin si de verdad se usó el
+      // cronómetro y ya se detuvo; si no, el registro queda sin duración,
+      // igual que antes.
+      if (horaInicioCrono && horaFinCrono) {
+        payload.hora_inicio = horaInicioCrono.toISOString();
+        payload.hora_fin = horaFinCrono.toISOString();
+      }
 
       try {
         const res = await fetch(`${API_BASE_URL}/produccion`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(form)
+          body: JSON.stringify(payload)
         });
 
         if (res.ok) {
@@ -661,17 +725,41 @@ export default function App() {
             operario_id: '',
             tarea_id: '',
             pedido_id: '',
-            cantidad: 1,
+            unidades_buenas: 1,
+            unidades_defectuosas: 0,
             fecha: new Date().toISOString().slice(0, 10),
             observaciones: ''
           });
+          setHoraInicioCrono(null);
+          setHoraFinCrono(null);
+          setSegundosTranscurridos(0);
         } else {
-          alert('❌ Error al registrar');
+          const data = await res.json();
+          alert('❌ ' + (data.error || 'Error al registrar'));
         }
       } catch (error) {
         alert('❌ Error: ' + error.message);
       }
     };
+
+    // Historia 3, Escenario 3: tiempo promedio por operario, calculado a
+    // partir de los registros ya cargados que sí tienen duración guardada.
+    const tiempoPromedioPorOperario = React.useMemo(() => {
+      const acumulado = {};
+      produccion.forEach(p => {
+        if (!p.duracion_segundos) return;
+        if (!acumulado[p.operario_nombre]) {
+          acumulado[p.operario_nombre] = { total: 0, cantidad: 0 };
+        }
+        acumulado[p.operario_nombre].total += p.duracion_segundos;
+        acumulado[p.operario_nombre].cantidad += 1;
+      });
+      return Object.entries(acumulado).map(([nombre, { total, cantidad }]) => ({
+        nombre,
+        promedioSegundos: Math.round(total / cantidad),
+        registros: cantidad
+      }));
+    }, [produccion]);
 
     return (
       <div style={{ padding: '30px' }}>
@@ -687,7 +775,8 @@ export default function App() {
           <select
             value={form.operario_id}
             onChange={(e) => setForm({ ...form, operario_id: e.target.value })}
-            style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}
+            disabled={cronometroActivo}
+            style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box', opacity: cronometroActivo ? 0.6 : 1 }}
           >
             <option value="">-- Seleccionar Operario --</option>
             {operarios.map(op => (
@@ -698,7 +787,8 @@ export default function App() {
           <select
             value={form.tarea_id}
             onChange={(e) => setForm({ ...form, tarea_id: e.target.value })}
-            style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}
+            disabled={cronometroActivo}
+            style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box', opacity: cronometroActivo ? 0.6 : 1 }}
           >
             <option value="">-- Seleccionar Tarea --</option>
             {tareas.map(t => (
@@ -717,15 +807,70 @@ export default function App() {
             ))}
           </select>
 
+          <div style={{
+            backgroundColor: cronometroActivo ? '#fff3cd' : '#f5f5f5',
+            border: `1px solid ${cronometroActivo ? COLORS.warning : COLORS.border}`,
+            borderRadius: '4px',
+            padding: '12px',
+            marginBottom: '15px',
+            textAlign: 'center'
+          }}>
+            <p style={{ margin: '0 0 8px 0', fontSize: '13px', color: '#666', fontWeight: 'bold' }}>
+              ⏱️ Cronómetro de tarea
+            </p>
+            <p style={{ margin: '0 0 10px 0', fontSize: '26px', fontFamily: 'monospace', color: COLORS.primary }}>
+              {formatearTiempo(segundosTranscurridos)}
+            </p>
+            {!cronometroActivo ? (
+              <button
+                onClick={iniciarCronometro}
+                style={{ padding: '8px 16px', border: 'none', borderRadius: '4px', backgroundColor: COLORS.success, color: 'white', cursor: 'pointer', fontWeight: 'bold' }}
+              >
+                ▶️ Iniciar cronómetro
+              </button>
+            ) : (
+              <button
+                onClick={detenerCronometro}
+                style={{ padding: '8px 16px', border: 'none', borderRadius: '4px', backgroundColor: COLORS.danger, color: 'white', cursor: 'pointer', fontWeight: 'bold' }}
+              >
+                ⏹️ Detener
+              </button>
+            )}
+            {horaInicioCrono && horaFinCrono && (
+              <p style={{ margin: '10px 0 0 0', fontSize: '12px', color: '#666' }}>
+                Tiempo capturado: {formatearTiempo(segundosTranscurridos)} — se guardará junto con este registro.
+              </p>
+            )}
+          </div>
+
+          <label style={{ display: 'block', fontSize: '13px', color: '#666', marginBottom: '4px', fontWeight: 'bold' }}>
+            Unidades buenas
+          </label>
           <input
             type="number"
-            min="0.5"
+            min="0"
             step="0.5"
-            value={form.cantidad}
-            onChange={(e) => setForm({ ...form, cantidad: parseFloat(e.target.value) || 1 })}
-            placeholder="Cantidad"
+            value={form.unidades_buenas}
+            onChange={(e) => setForm({ ...form, unidades_buenas: e.target.value })}
+            placeholder="Unidades buenas"
             style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}
           />
+
+          <label style={{ display: 'block', fontSize: '13px', color: '#666', marginBottom: '4px', fontWeight: 'bold' }}>
+            Unidades defectuosas
+          </label>
+          <input
+            type="number"
+            min="0"
+            step="0.5"
+            value={form.unidades_defectuosas}
+            onChange={(e) => setForm({ ...form, unidades_defectuosas: e.target.value })}
+            placeholder="Unidades defectuosas"
+            style={{ width: '100%', padding: '10px', marginBottom: '4px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}
+          />
+          <p style={{ fontSize: '13px', color: '#999', margin: '0 0 10px 0' }}>
+            Total de unidades: <strong>{totalUnidades}</strong>
+          </p>
 
           <input
             type="date"
@@ -749,6 +894,24 @@ export default function App() {
           </button>
         </div>
 
+        {tiempoPromedioPorOperario.length > 0 && (
+          <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '8px', marginBottom: '30px' }}>
+            <h2 style={{ fontSize: '18px', color: COLORS.primary, marginBottom: '15px' }}>
+              ⏱️ Tiempo promedio por operario
+            </h2>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '15px' }}>
+              {tiempoPromedioPorOperario.map(t => (
+                <div key={t.nombre} style={{ padding: '12px', borderRadius: '6px', border: `1px solid ${COLORS.border}`, borderLeft: `4px solid ${COLORS.warning}` }}>
+                  <p style={{ margin: '0 0 4px 0', fontWeight: 'bold', color: COLORS.primary }}>{t.nombre}</p>
+                  <p style={{ margin: 0, fontSize: '14px', color: '#666' }}>
+                    Promedio: <strong>{formatearTiempo(t.promedioSegundos)}</strong> ({t.registros} {t.registros === 1 ? 'registro' : 'registros'} con tiempo)
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         <h2 style={{ fontSize: '18px', color: COLORS.primary, marginBottom: '15px' }}>
           Últimos Registros ({produccion.length})
         </h2>
@@ -761,7 +924,15 @@ export default function App() {
                 </p>
                 <p style={{ fontSize: '16px', fontWeight: 'bold', margin: '0 0 5px 0' }}>{p.operario_nombre}</p>
                 <p style={{ fontSize: '14px', color: '#666', margin: '0 0 5px 0' }}>Tarea: {p.tarea_nombre}</p>
-                <p style={{ fontSize: '14px', color: '#666', margin: '0' }}>Cantidad: {p.cantidad}</p>
+                <p style={{ fontSize: '14px', color: '#666', margin: '0' }}>
+                  Buenas: <strong style={{ color: COLORS.success }}>{p.unidades_buenas ?? p.cantidad}</strong>
+                  {' · '}
+                  Defectuosas: <strong style={{ color: (p.unidades_defectuosas || 0) > 0 ? COLORS.danger : '#666' }}>{p.unidades_defectuosas ?? 0}</strong>
+                </p>
+                <p style={{ fontSize: '12px', color: '#999', margin: '2px 0 0 0' }}>Total: {p.cantidad}</p>
+                {p.duracion_segundos != null && (
+                  <p style={{ fontSize: '12px', color: COLORS.primary, margin: '4px 0 0 0' }}>⏱️ Duración: {formatearTiempo(p.duracion_segundos)}</p>
+                )}
                 {p.pedido_numero && <p style={{ fontSize: '12px', color: '#999', marginTop: '5px' }}>Pedido: {p.pedido_numero}</p>}
               </div>
             ))}
