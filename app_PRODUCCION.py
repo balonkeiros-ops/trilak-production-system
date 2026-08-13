@@ -303,7 +303,19 @@ class Produccion(db.Model):
     operario_id = db.Column(db.Integer, db.ForeignKey('operario.id'), nullable=False)
     tarea_id = db.Column(db.Integer, db.ForeignKey('tarea.id'), nullable=False)
     pedido_id = db.Column(db.Integer, db.ForeignKey('pedido.id'), nullable=True)
+    # 'cantidad' se mantiene por compatibilidad con pantallas/reportes
+    # antiguos: siempre es el TOTAL (unidades_buenas + unidades_defectuosas).
     cantidad = db.Column(db.Float, default=1)
+    # Historia 4 (control de calidad): desglose real de unidades buenas vs
+    # defectuosas por cada registro de producción.
+    unidades_buenas = db.Column(db.Float, default=0)
+    unidades_defectuosas = db.Column(db.Float, default=0)
+    # Historia 3 (cronómetro): tiempo real que tomó la tarea. Son opcionales
+    # a propósito -> si el registro se hace sin usar el cronómetro (como
+    # antes), simplemente quedan en null y todo sigue funcionando igual.
+    hora_inicio = db.Column(db.DateTime, nullable=True)
+    hora_fin = db.Column(db.DateTime, nullable=True)
+    duracion_segundos = db.Column(db.Integer, nullable=True)
     fecha = db.Column(db.DateTime, default=datetime.now)
     observaciones = db.Column(db.Text)
 
@@ -321,6 +333,11 @@ class Produccion(db.Model):
             'pedido_id': self.pedido_id,
             'pedido_numero': self.pedido.numero_pedido if self.pedido else None,
             'cantidad': self.cantidad,
+            'unidades_buenas': self.unidades_buenas,
+            'unidades_defectuosas': self.unidades_defectuosas,
+            'hora_inicio': self.hora_inicio.isoformat() if self.hora_inicio else None,
+            'hora_fin': self.hora_fin.isoformat() if self.hora_fin else None,
+            'duracion_segundos': self.duracion_segundos,
             'fecha': self.fecha.isoformat(),
             'observaciones': self.observaciones
         }
@@ -876,11 +893,49 @@ def produccion_route():
         if not tarea:
             return jsonify({'error': 'Tarea no encontrada'}), 400
 
+        # Historia 4: desglose de calidad. Si el frontend manda
+        # unidades_buenas/unidades_defectuosas se usan esas; si no (pantallas
+        # antiguas que solo mandan 'cantidad'), se asume que todo fue bueno,
+        # para no romper compatibilidad.
+        if 'unidades_buenas' in data or 'unidades_defectuosas' in data:
+            unidades_buenas = float(data.get('unidades_buenas', 0) or 0)
+            unidades_defectuosas = float(data.get('unidades_defectuosas', 0) or 0)
+        else:
+            unidades_buenas = float(data.get('cantidad', 1) or 0)
+            unidades_defectuosas = 0
+
+        if unidades_buenas < 0 or unidades_defectuosas < 0:
+            return jsonify({'error': 'Las unidades no pueden ser negativas'}), 400
+
+        total_unidades = unidades_buenas + unidades_defectuosas
+        if total_unidades <= 0:
+            return jsonify({'error': 'Debes registrar al menos una unidad (buena o defectuosa)'}), 400
+
+        # Historia 3 (cronómetro): si el frontend manda hora_inicio y
+        # hora_fin (porque se usó el cronómetro), se calcula la duración
+        # real en segundos. Si no vienen (registro manual, sin cronómetro),
+        # se guarda sin duración, igual que antes.
+        hora_inicio = None
+        hora_fin = None
+        duracion_segundos = None
+        if data.get('hora_inicio') and data.get('hora_fin'):
+            try:
+                hora_inicio = datetime.fromisoformat(data['hora_inicio'])
+                hora_fin = datetime.fromisoformat(data['hora_fin'])
+                duracion_segundos = max(0, int((hora_fin - hora_inicio).total_seconds()))
+            except (ValueError, TypeError):
+                return jsonify({'error': 'hora_inicio/hora_fin del cronómetro no son fechas válidas'}), 400
+
         nueva = Produccion(
             operario_id=operario.id,
             tarea_id=tarea.id,
             pedido_id=data.get('pedido_id') or None,
-            cantidad=data.get('cantidad', 1),
+            cantidad=total_unidades,
+            unidades_buenas=unidades_buenas,
+            unidades_defectuosas=unidades_defectuosas,
+            hora_inicio=hora_inicio,
+            hora_fin=hora_fin,
+            duracion_segundos=duracion_segundos,
             fecha=datetime.fromisoformat(data['fecha']) if data.get('fecha') else datetime.now(),
             observaciones=data.get('observaciones', '')
         )
@@ -906,6 +961,14 @@ def produccion_por_operario(operario_id):
 @app.route('/api/dashboard', methods=['GET'])
 def dashboard():
     """Retorna métricas para el panel de control."""
+    # Historia 4: % de calidad real = unidades buenas / total de unidades
+    # registradas, calculado sobre TODOS los registros de producción. Antes
+    # este valor era un número fijo (98.2) que no salía de ningún dato real.
+    total_buenas = db.session.query(db.func.coalesce(db.func.sum(Produccion.unidades_buenas), 0)).scalar()
+    total_defectuosas = db.session.query(db.func.coalesce(db.func.sum(Produccion.unidades_defectuosas), 0)).scalar()
+    total_producido = total_buenas + total_defectuosas
+    calidad_real = round((total_buenas / total_producido) * 100, 1) if total_producido > 0 else None
+
     return jsonify({
         'metricas': {
             'total_pedidos': Pedido.query.count(),
@@ -919,7 +982,12 @@ def dashboard():
             'total_registros_produccion': Produccion.query.count(),
             'produccion_promedio': 6975,
             'utilizacion': 99.6,
-            'calidad': 98.2
+            # Se mantiene la clave 'calidad' por compatibilidad con el
+            # frontend actual, pero ahora es un cálculo real (o null si
+            # todavía no hay ningún registro de producción cargado).
+            'calidad': calidad_real,
+            'unidades_buenas_total': total_buenas,
+            'unidades_defectuosas_total': total_defectuosas
         }
     })
 
@@ -930,8 +998,45 @@ def dashboard():
 # lo que usa Render según el Procfile). Antes solo estaba dentro de
 # "if __name__ == '__main__'", así que en Render nunca se creaban las tablas
 # ni se cargaban los tipos de balón / operarios / tareas / materiales.
+def migrar_columnas_faltantes():
+    """
+    db.create_all() SOLO crea tablas que no existen -- nunca agrega columnas
+    nuevas a una tabla que ya existía. En Render el disco a veces persiste
+    entre despliegues normales (no siempre se limpia), así que si agregamos
+    una columna a un modelo (ej. Material.umbral_minimo) y la tabla vieja
+    ya existía en el disco, la app revienta al arrancar con
+    "no such column: material.umbral_minimo".
+
+    Esta función revisa, tabla por tabla y columna por columna, cuáles
+    columnas del modelo actual no existen todavía en la base real, y las
+    agrega con ALTER TABLE. Funciona tanto en SQLite como en Postgres.
+    Es segura de correr en cada arranque: si ya está todo al día, no hace
+    nada.
+    """
+    inspector = db.inspect(db.engine)
+    for tabla in db.metadata.tables.values():
+        nombre_tabla = tabla.name
+        if not inspector.has_table(nombre_tabla):
+            continue  # tabla nueva -> ya la crea db.create_all(), nada que migrar
+        columnas_existentes = {col['name'] for col in inspector.get_columns(nombre_tabla)}
+        for columna in tabla.columns:
+            if columna.name in columnas_existentes:
+                continue
+            try:
+                tipo_sql = columna.type.compile(dialect=db.engine.dialect)
+                db.session.execute(db.text(
+                    f'ALTER TABLE {nombre_tabla} ADD COLUMN {columna.name} {tipo_sql}'
+                ))
+                db.session.commit()
+                print(f"[MIGRACION] Columna agregada: {nombre_tabla}.{columna.name}")
+            except Exception as e:
+                db.session.rollback()
+                print(f"[MIGRACION] No se pudo agregar {nombre_tabla}.{columna.name}: {e}")
+
+
 with app.app_context():
     db.create_all()
+    migrar_columnas_faltantes()
     inicializar_datos()
     cargar_materiales_sgii()
 
