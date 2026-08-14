@@ -759,7 +759,8 @@ export default function App() {
         promedioSegundos: Math.round(total / cantidad),
         registros: cantidad
       }));
-    }, [produccion]);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     return (
       <div style={{ padding: '30px' }}>
