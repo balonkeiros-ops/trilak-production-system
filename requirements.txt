@@ -8,3 +8,5 @@ SQLAlchemy
 gunicorn
 psycopg2-binary
 urllib3
+xlsxwriter
+reportlab
