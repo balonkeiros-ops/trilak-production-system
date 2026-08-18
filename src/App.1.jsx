@@ -194,6 +194,10 @@ export default function App() {
     const LIMITE_DETALLES = 500;
     const FORMATOS_IMAGEN_VALIDOS = ['image/png', 'image/jpeg'];
 
+    // Escenario Gherkin 2: alerta visual destacada cuando un material
+    // (ej. cubierta PU/PVC) queda por debajo del umbral mínimo tras crear
+    // el pedido. Se guarda aquí para poder mostrarla como banner, no como
+    // un simple alert() del navegador que se cierra y se olvida.
     const [alertaStock, setAlertaStock] = useState([]);
 
     const crearPedido = async () => {
@@ -216,6 +220,9 @@ export default function App() {
         const data = await res.json();
 
         if (res.ok) {
+          // Escenario 2: stock crítico -> banner visual destacado (se queda
+          // en pantalla hasta que el usuario lo cierra, no un alert() que
+          // desaparece con un clic).
           if (data.alertas_stock && data.alertas_stock.length > 0) {
             setAlertaStock(data.alertas_stock);
           }
@@ -258,6 +265,9 @@ export default function App() {
       setFormData({ ...formData, items: newItems });
     };
 
+    // Escenario Gherkin 2: adjuntar fotografía/imagen de referencia (PNG/JPG).
+    // Se lee cada archivo como base64 en el navegador y se manda junto con
+    // el resto del pedido en el mismo POST /api/pedidos.
     const agregarImagenes = (fileList) => {
       Array.from(fileList).forEach(file => {
         if (!FORMATOS_IMAGEN_VALIDOS.includes(file.type)) {
@@ -266,7 +276,7 @@ export default function App() {
         }
         const reader = new FileReader();
         reader.onload = () => {
-          const contenido_base64 = reader.result.split(',')[1];
+          const contenido_base64 = reader.result.split(',')[1]; // quitar "data:image/png;base64,"
           setFormData(prev => ({
             ...prev,
             imagenes: [...prev.imagenes, {
@@ -633,12 +643,8 @@ export default function App() {
         {tiposFiltrados.length > 0 ? (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px' }}>
             {tiposFiltrados.map(tipo => {
-              // ---- MODIFICADO: Obtener color del semáforo desde metricas ----
-              const colorSemaforo = tipo.metricas?.semaforo
-                ? COLOR_SEMAFORO[tipo.metricas.semaforo]
-                : COLORS.border;
-              // -------------------------------------------------------------
               const seleccionado = tipoSeleccionado && tipoSeleccionado.id === tipo.id;
+              const colorSemaforo = COLOR_SEMAFORO[tipo.metricas?.semaforo] || COLORS.border;
               return (
                 <button
                   key={tipo.id}
@@ -647,9 +653,7 @@ export default function App() {
                     backgroundColor: 'white',
                     padding: '20px',
                     borderRadius: '8px',
-                    // ---- MODIFICADO: borde izquierdo dinámico ----
                     borderLeft: `6px solid ${colorSemaforo}`,
-                    // ----------------------------------------------
                     border: seleccionado ? `2px solid ${COLORS.secondary}` : `1px solid ${COLORS.border}`,
                     borderLeftWidth: '6px',
                     borderLeftColor: colorSemaforo,
@@ -662,13 +666,6 @@ export default function App() {
                 >
                   <p style={{ fontSize: '18px', fontWeight: 'bold', color: COLORS.primary, margin: '0 0 6px 0' }}>{tipo.nombre}</p>
                   <p style={{ fontSize: '12px', color: '#999', margin: '0 0 8px 0' }}>{tipo.categoria || 'Otros'}</p>
-                  {/* ---- MODIFICADO: Mostrar métricas básicas si existen ---- */}
-                  {tipo.metricas && (
-                    <p style={{ fontSize: '13px', color: '#666', margin: 0 }}>
-                      Stock: <strong>{tipo.metricas.stock_actual ?? 0}</strong> · Pendientes: <strong>{tipo.metricas.pendientes ?? 0}</strong>
-                    </p>
-                  )}
-                  {/* ---------------------------------------------------------- */}
                   {tipo.metricas && (
                     <p style={{ fontSize: '13px', color: '#666', margin: 0 }}>
                       Disponibles: <strong>{tipo.metricas.disponibles}</strong> · Pendientes: <strong>{tipo.metricas.pendientes}</strong>
@@ -783,6 +780,10 @@ export default function App() {
       observaciones: ''
     });
 
+    // Historia 3: cronómetro por operario/tarea. horaInicioRef guarda el
+    // Date real; segundosTranscurridos solo es para refrescar el texto en
+    // pantalla cada segundo (setInterval no puede leer un useState directo
+    // de forma confiable, por eso el valor real vive en el ref).
     const [cronometroActivo, setCronometroActivo] = useState(false);
     const [segundosTranscurridos, setSegundosTranscurridos] = useState(0);
     const [horaInicioCrono, setHoraInicioCrono] = useState(null);
@@ -835,6 +836,9 @@ export default function App() {
       }
 
       const payload = { ...form };
+      // Solo se manda hora_inicio/hora_fin si de verdad se usó el
+      // cronómetro y ya se detuvo; si no, el registro queda sin duración,
+      // igual que antes.
       if (horaInicioCrono && horaFinCrono) {
         payload.hora_inicio = horaInicioCrono.toISOString();
         payload.hora_fin = horaFinCrono.toISOString();
@@ -872,7 +876,8 @@ export default function App() {
       }
     };
 
-    // ---- MODIFICADO: dependencia corregida ----
+    // Historia 3, Escenario 3: tiempo promedio por operario, calculado a
+    // partir de los registros ya cargados que sí tienen duración guardada.
     const tiempoPromedioPorOperario = React.useMemo(() => {
       const acumulado = {};
       produccion.forEach(p => {
@@ -888,8 +893,7 @@ export default function App() {
         promedioSegundos: Math.round(total / cantidad),
         registros: cantidad
       }));
-    }, [produccion]); // <--- Agregada dependencia
-    // -------------------------------------------
+    }, [produccion]);
 
     return (
       <div style={{ padding: '30px' }}>
