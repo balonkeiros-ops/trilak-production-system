@@ -872,23 +872,23 @@ export default function App() {
       }
     };
 
-    // ---- MODIFICADO: dependencia corregida ----
-    const tiempoPromedioPorOperario = React.useMemo(() => {
-      const acumulado = {};
-      produccion.forEach(p => {
-        if (!p.duracion_segundos) return;
-        if (!acumulado[p.operario_nombre]) {
-          acumulado[p.operario_nombre] = { total: 0, cantidad: 0 };
-        }
-        acumulado[p.operario_nombre].total += p.duracion_segundos;
-        acumulado[p.operario_nombre].cantidad += 1;
-      });
-      return Object.entries(acumulado).map(([nombre, { total, cantidad }]) => ({
-        nombre,
-        promedioSegundos: Math.round(total / cantidad),
-        registros: cantidad
-      }));
-    }, [produccion]); // <--- Agregada dependencia
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+const tiempoPromedioPorOperario = React.useMemo(() => {
+  const acumulado = {};
+  produccion.forEach(p => {
+    if (!p.duracion_segundos) return;
+    if (!acumulado[p.operario_nombre]) {
+      acumulado[p.operario_nombre] = { total: 0, cantidad: 0 };
+    }
+    acumulado[p.operario_nombre].total += p.duracion_segundos;
+    acumulado[p.operario_nombre].cantidad += 1;
+  });
+  return Object.entries(acumulado).map(([nombre, { total, cantidad }]) => ({
+    nombre,
+    promedioSegundos: Math.round(total / cantidad),
+    registros: cantidad
+  }));
+}, []);
     // -------------------------------------------
 
     return (
