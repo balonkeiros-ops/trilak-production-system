@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import * as XLSX from 'xlsx';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 const API_BASE_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
   ? 'http://127.0.0.1:5002/api' 
@@ -33,41 +34,30 @@ export default function App() {
   const cargarDatos = async () => {
     try {
       setCargando(true);
-
-      // Inicializar BD
       try {
         await fetch(`${API_BASE_URL}/inicializar`, { method: 'POST' });
-      } catch (e) {
-        console.log('BD ya existe');
-      }
+      } catch (e) { console.log('BD ya existe'); }
 
       await new Promise(r => setTimeout(r, 500));
 
-      // Cargar tipos de balón
       let res = await fetch(`${API_BASE_URL}/tipos-balon`);
       if (res.ok) setTiposBalon(await res.json());
 
-      // Cargar operarios
       res = await fetch(`${API_BASE_URL}/operarios`);
       if (res.ok) setOperarios(await res.json());
 
-      // Cargar materiales
       res = await fetch(`${API_BASE_URL}/materiales`);
       if (res.ok) setMateriales(await res.json());
 
-      // Cargar pedidos
       res = await fetch(`${API_BASE_URL}/pedidos`);
       if (res.ok) setPedidos(await res.json());
 
-      // Cargar métricas
       res = await fetch(`${API_BASE_URL}/dashboard`);
       if (res.ok) setMetricas(await res.json());
 
-      // Cargar tareas
       res = await fetch(`${API_BASE_URL}/tareas`);
       if (res.ok) setTareas(await res.json());
 
-      // Cargar producción
       res = await fetch(`${API_BASE_URL}/produccion`);
       if (res.ok) setProduccion(await res.json());
 
@@ -82,7 +72,6 @@ export default function App() {
     try {
       const wb = XLSX.utils.book_new();
 
-      // Resumen
       const resumen = [
         ['DASHBOARD PRODUCCIÓN - TRILAK'],
         [`Generado: ${new Date().toLocaleDateString('es-CO')}`],
@@ -99,22 +88,18 @@ export default function App() {
       const ws1 = XLSX.utils.aoa_to_sheet(resumen);
       XLSX.utils.book_append_sheet(wb, ws1, 'Resumen');
 
-      // Operarios
       const op = [['OPERARIO', 'ESPECIALIDAD', 'ESTADO'], ...operarios.map(o => [o.nombre, o.especialidad, o.estado])];
       const ws2 = XLSX.utils.aoa_to_sheet(op);
       XLSX.utils.book_append_sheet(wb, ws2, 'Operarios');
 
-      // Tipos de Balón
       const tipos = [['TIPO DE BALÓN'], ...tiposBalon.map(t => [t.nombre])];
       const ws3 = XLSX.utils.aoa_to_sheet(tipos);
       XLSX.utils.book_append_sheet(wb, ws3, 'Tipos Balón');
 
-      // Materiales
       const mat = [['MATERIAL', 'STOCK (metros)', 'UNIDAD'], ...materiales.map(m => [m.nombre, m.cantidad_disponible, m.unidad])];
       const ws4 = XLSX.utils.aoa_to_sheet(mat);
       XLSX.utils.book_append_sheet(wb, ws4, 'Materiales');
 
-      // Pedidos
       const ped = [
         ['PEDIDO', 'CLIENTE', 'ESTADO', 'FECHA', 'DETALLES', 'IMÁGENES (REFERENCIA)'],
         ...pedidos.map(p => [
@@ -131,7 +116,6 @@ export default function App() {
       const ws5 = XLSX.utils.aoa_to_sheet(ped);
       XLSX.utils.book_append_sheet(wb, ws5, 'Pedidos');
 
-      // Producción
       const prodData = [['FECHA', 'OPERARIO', 'TAREA', 'CANTIDAD', 'PEDIDO', 'OBSERVACIONES']];
       produccion.forEach(p => {
         prodData.push([
@@ -161,6 +145,8 @@ export default function App() {
     </div>
   );
 
+  // ── DASHBOARD CON WIDGETS (HU-15) ──────────────────────────────────────────
+
   const DashboardView = () => (
     <div style={{ padding: '30px' }}>
       <h1 style={{ fontSize: '28px', color: COLORS.primary, marginBottom: '30px' }}>📊 Dashboard</h1>
@@ -179,8 +165,175 @@ export default function App() {
       <button onClick={exportarExcel} style={{ padding: '12px 20px', backgroundColor: COLORS.primary, color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold', marginBottom: '20px' }}>
         📊 Descargar Excel
       </button>
+
+      {/* Widget Ejecutivo (HU-15) */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginTop: '30px' }}>
+        <div style={{ backgroundColor: 'white', padding: '15px', borderRadius: '8px', borderLeft: `5px solid ${COLORS.success}` }}>
+          <h3 style={{ color: COLORS.primary, marginBottom: '10px' }}>🏆 Top Operarios Más Productivos</h3>
+          {metricas?.metricas?.top_operarios && metricas.metricas.top_operarios.length > 0 ? (
+            <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+              {metricas.metricas.top_operarios.map((op, i) => (
+                <li key={i} style={{ padding: '8px 0', borderBottom: `1px solid ${COLORS.border}`, display: 'flex', justifyContent: 'space-between' }}>
+                  <span>{i+1}. {op.nombre}</span>
+                  <span style={{ fontWeight: 'bold', color: COLORS.primary }}>{op.total_unidades} und.</span>
+                </li>
+              ))}
+            </ul>
+          ) : <p style={{ fontSize: '13px', color: '#999' }}>Aún no hay suficientes datos.</p>}
+        </div>
+
+        <div style={{ backgroundColor: 'white', padding: '15px', borderRadius: '8px', borderLeft: `5px solid ${COLORS.danger}` }}>
+          <h3 style={{ color: COLORS.primary, marginBottom: '10px' }}>⚠️ Alertas de Merma (Top Defectos)</h3>
+          {metricas?.metricas?.top_merma && metricas.metricas.top_merma.length > 0 ? (
+            <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+              {metricas.metricas.top_merma.map((op, i) => (
+                <li key={i} style={{ padding: '8px 0', borderBottom: `1px solid ${COLORS.border}`, display: 'flex', justifyContent: 'space-between' }}>
+                  <span>{i+1}. {op.nombre}</span>
+                  <span style={{ fontWeight: 'bold', color: COLORS.danger }}>{op.total_defectos} defectos</span>
+                </li>
+              ))}
+            </ul>
+          ) : <p style={{ fontSize: '13px', color: '#999' }}>Sin registros de defectos.</p>}
+        </div>
+      </div>
     </div>
   );
+
+  // ── NUEVO: ANALÍTICA DE OPERARIO (HU-11, HU-13, HU-14) ──────────────────
+
+  const AnaliticaOperarioView = ({ operarioId, onBack }) => {
+    const [periodo, setPeriodo] = useState('mensual');
+    const [analitica, setAnalitica] = useState(null);
+    const [cargando, setCargando] = useState(true);
+
+    useEffect(() => {
+      const cargarAnalitica = async () => {
+        setCargando(true);
+        try {
+          const res = await fetch(`${API_BASE_URL}/operarios/${operarioId}/analitica?periodo=${periodo}`);
+          if (res.ok) setAnalitica(await res.json());
+          else setAnalitica(null);
+        } catch (e) { console.error(e); }
+        setCargando(false);
+      };
+      cargarAnalitica();
+    }, [operarioId, periodo]);
+
+    const descargarReporte = async (formato) => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/reportes/operarios/${operarioId}?formato=${formato}`, {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(analitica) // Enviamos los datos calculados al backend
+        });
+        if (res.ok) {
+          const blob = await res.blob();
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `reporte.${formato === 'excel' ? 'xlsx' : 'pdf'}`;
+          document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        }
+      } catch (e) { alert('Error al descargar: ' + e.message); }
+    };
+
+    if (cargando) return <div style={{ padding: '20px', textAlign: 'center' }}>⏳ Cargando analítica...</div>;
+    if (!analitica) return <div style={{ padding: '20px', textAlign: 'center' }}>Sin datos para este periodo</div>;
+
+    const { operario, metricas, grafica_proactividad, detalle_pedidos } = analitica;
+
+    return (
+      <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '8px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+          <h2 style={{ fontSize: '22px', color: COLORS.primary, margin: 0 }}>
+            📊 Analítica de {operario.nombre}
+          </h2>
+          <button onClick={onBack} style={{ padding: '6px 12px', backgroundColor: '#eee', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>← Volver</button>
+        </div>
+
+        <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', flexWrap: 'wrap' }}>
+          {['diario', 'semanal', 'mensual'].map(p => (
+            <button 
+              key={p} 
+              onClick={() => setPeriodo(p)} 
+              style={{ padding: '6px 14px', borderRadius: '20px', border: `1px solid ${COLORS.primary}`, backgroundColor: periodo === p ? COLORS.primary : 'white', color: periodo === p ? 'white' : COLORS.primary, cursor: 'pointer' }}
+            >
+              {p.charAt(0).toUpperCase() + p.slice(1)}
+            </button>
+          ))}
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}>
+            <button onClick={() => descargarReporte('excel')} style={{ padding: '8px 12px', backgroundColor: COLORS.success, color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>📊 Excel</button>
+            <button onClick={() => descargarReporte('pdf')} style={{ padding: '8px 12px', backgroundColor: COLORS.danger, color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>📄 PDF</button>
+          </div>
+        </div>
+
+        {/* KPIs */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '15px', marginBottom: '30px' }}>
+          <div style={{ padding: '15px', borderRadius: '6px', backgroundColor: '#f9f9f9', textAlign: 'center', borderTop: `4px solid ${COLORS.primary}` }}>
+            <p style={{ margin: '0 0 5px 0', fontSize: '12px', color: '#666' }}>Unidades Totales</p>
+            <p style={{ margin: 0, fontSize: '24px', fontWeight: 'bold', color: COLORS.primary }}>{metricas.total_unidades}</p>
+          </div>
+          <div style={{ padding: '15px', borderRadius: '6px', backgroundColor: '#f9f9f9', textAlign: 'center', borderTop: `4px solid ${COLORS.success}` }}>
+            <p style={{ margin: '0 0 5px 0', fontSize: '12px', color: '#666' }}>Índice Calidad</p>
+            <p style={{ margin: 0, fontSize: '24px', fontWeight: 'bold', color: COLORS.success }}>{metricas.indice_calidad_porcentaje}%</p>
+          </div>
+          <div style={{ padding: '15px', borderRadius: '6px', backgroundColor: '#f9f9f9', textAlign: 'center', borderTop: `4px solid ${COLORS.warning}` }}>
+            <p style={{ margin: '0 0 5px 0', fontSize: '12px', color: '#666' }}>Eficiencia Global</p>
+            <p style={{ margin: 0, fontSize: '24px', fontWeight: 'bold', color: COLORS.warning }}>{metricas.eficiencia_porcentaje}%</p>
+          </div>
+          <div style={{ padding: '15px', borderRadius: '6px', backgroundColor: '#f9f9f9', textAlign: 'center', borderTop: `4px solid ${COLORS.secondary}` }}>
+            <p style={{ margin: '0 0 5px 0', fontSize: '12px', color: '#666' }}>Productividad</p>
+            <p style={{ margin: 0, fontSize: '24px', fontWeight: 'bold', color: COLORS.secondary }}>{metricas.productividad_und_hora} und/h</p>
+          </div>
+        </div>
+
+        {/* Gráfica HU-11 */}
+        <h3 style={{ marginBottom: '15px' }}>📈 Proactividad vs Tiempo</h3>
+        {grafica_proactividad && grafica_proactividad.length > 0 ? (
+          <div style={{ height: '250px', marginBottom: '30px', padding: '10px', border: `1px solid ${COLORS.border}`, borderRadius: '6px' }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={grafica_proactividad}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="fecha" />
+                <YAxis />
+                <Tooltip />
+                <Line type="monotone" dataKey="proactividad" stroke={COLORS.secondary} strokeWidth={3} dot={{ r: 4 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        ) : <p style={{ color: '#999', marginBottom: '30px' }}>No hay datos suficientes para graficar en este periodo.</p>}
+
+        {/* Trazabilidad HU-13 */}
+        <h3 style={{ marginBottom: '15px' }}>📋 Detalle de Calidad por Pedido</h3>
+        {detalle_pedidos && detalle_pedidos.length > 0 ? (
+          <div style={{ maxHeight: '200px', overflowY: 'auto', border: `1px solid ${COLORS.border}`, borderRadius: '4px' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px' }}>
+              <thead style={{ backgroundColor: '#f4f4f4' }}>
+                <tr>
+                  <th style={{ padding: '8px', textAlign: 'left' }}>Pedido</th>
+                  <th style={{ padding: '8px', textAlign: 'center' }}>Totales</th>
+                  <th style={{ padding: '8px', textAlign: 'center', color: COLORS.success }}>Buenas</th>
+                  <th style={{ padding: '8px', textAlign: 'center', color: COLORS.danger }}>Defectuosas</th>
+                </tr>
+              </thead>
+              <tbody>
+                {detalle_pedidos.map(p => (
+                  <tr key={p.numero} style={{ borderTop: `1px solid ${COLORS.border}` }}>
+                    <td style={{ padding: '8px', fontWeight: 'bold' }}>{p.numero}</td>
+                    <td style={{ padding: '8px', textAlign: 'center' }}>{p.total_unidades}</td>
+                    <td style={{ padding: '8px', textAlign: 'center', color: COLORS.success }}>{p.buenas}</td>
+                    <td style={{ padding: '8px', textAlign: 'center', color: COLORS.danger }}>{p.defectuosas}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : <p style={{ color: '#999' }}>Sin pedidos asociados en este periodo.</p>}
+      </div>
+    );
+  };
+
+  // ── PEDIDOS ──────────────────────────────────────────────────────────────────
 
   const PedidosView = () => {
     const [formData, setFormData] = useState({
@@ -193,7 +346,6 @@ export default function App() {
 
     const LIMITE_DETALLES = 500;
     const FORMATOS_IMAGEN_VALIDOS = ['image/png', 'image/jpeg'];
-
     const [alertaStock, setAlertaStock] = useState([]);
 
     const crearPedido = async () => {
@@ -297,20 +449,11 @@ export default function App() {
             marginBottom: '20px',
             position: 'relative'
           }}>
-            <button
-              onClick={() => setAlertaStock([])}
-              title="Cerrar aviso"
-              style={{ position: 'absolute', top: '10px', right: '12px', border: 'none', background: 'transparent', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold', color: COLORS.danger }}
-            >
-              ✕
-            </button>
-            <p style={{ margin: '0 0 8px 0', fontWeight: 'bold', color: COLORS.danger, fontSize: '16px' }}>
-              ⚠️ Stock crítico de material
-            </p>
+            <button onClick={() => setAlertaStock([])} style={{ position: 'absolute', top: '10px', right: '12px', border: 'none', background: 'transparent', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold', color: COLORS.danger }}>✕</button>
+            <p style={{ margin: '0 0 8px 0', fontWeight: 'bold', color: COLORS.danger, fontSize: '16px' }}>⚠️ Stock crítico de material</p>
             {alertaStock.map((a, i) => (
               <p key={i} style={{ margin: '0 0 4px 0', fontSize: '14px', color: '#664d03' }}>
-                <strong>{a.material_nombre}</strong>: quedan {a.cantidad_disponible} {a.unidad}
-                {' '}(umbral mínimo configurado: {a.umbral_minimo} {a.unidad}). Es momento de reabastecer.
+                <strong>{a.material_nombre}</strong>: quedan {a.cantidad_disponible} {a.unidad} (umbral mínimo: {a.umbral_minimo}).
               </p>
             ))}
           </div>
@@ -318,107 +461,51 @@ export default function App() {
 
         <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '8px', marginBottom: '30px' }}>
           <h2 style={{ fontSize: '18px', color: COLORS.primary, marginBottom: '20px' }}>Crear Nuevo Pedido</h2>
-
           <input type="text" placeholder="Cliente" value={formData.cliente} onChange={(e) => setFormData({ ...formData, cliente: e.target.value })} style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }} />
-
           <input type="date" value={formData.fecha_entrega_solicitada} onChange={(e) => setFormData({ ...formData, fecha_entrega_solicitada: e.target.value })} style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }} />
 
           {formData.items.map((item, index) => (
             <div key={index} style={{ border: `1px solid ${COLORS.border}`, borderRadius: '4px', padding: '10px', marginBottom: '10px', position: 'relative' }}>
               {formData.items.length > 1 && (
-                <button
-                  onClick={() => quitarItem(index)}
-                  title="Quitar este tipo de balón"
-                  style={{ position: 'absolute', top: '6px', right: '6px', border: 'none', background: 'transparent', color: COLORS.danger, cursor: 'pointer', fontWeight: 'bold', fontSize: '16px' }}
-                >
-                  ✕
-                </button>
+                <button onClick={() => quitarItem(index)} style={{ position: 'absolute', top: '6px', right: '6px', border: 'none', background: 'transparent', color: COLORS.danger, cursor: 'pointer', fontWeight: 'bold', fontSize: '16px' }}>✕</button>
               )}
               <p style={{ margin: '0 0 8px 0', fontSize: '12px', color: '#999', fontWeight: 'bold' }}>Tipo de balón #{index + 1}</p>
-
               <select value={item.tipo_balon_id} onChange={(e) => actualizarItem(index, 'tipo_balon_id', e.target.value)} style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}>
                 <option value="">-- Seleccionar Tipo de Balón --</option>
-                {tiposBalon.map(tipo => (
-                  <option key={tipo.id} value={tipo.id}>{tipo.nombre}</option>
-                ))}
+                {tiposBalon.map(tipo => (<option key={tipo.id} value={tipo.id}>{tipo.nombre}</option>))}
               </select>
-
               <select value={item.material_id} onChange={(e) => actualizarItem(index, 'material_id', e.target.value)} style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}>
                 <option value="">-- Seleccionar Material --</option>
-                {materiales.map(mat => (
-                  <option key={mat.id} value={mat.id}>{mat.nombre} ({mat.cantidad_disponible} {mat.unidad})</option>
-                ))}
+                {materiales.map(mat => (<option key={mat.id} value={mat.id}>{mat.nombre} ({mat.cantidad_disponible} {mat.unidad})</option>))}
               </select>
-
               <input type="number" min="1" value={item.cantidad} onChange={(e) => actualizarItem(index, 'cantidad', parseInt(e.target.value) || 1)} placeholder="Cantidad" style={{ width: '100%', padding: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }} />
             </div>
           ))}
 
-          <button onClick={agregarItem} style={{ width: '100%', padding: '10px', marginBottom: '15px', backgroundColor: 'white', color: COLORS.primary, border: `1px dashed ${COLORS.primary}`, borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>
-            ➕ Agregar otro tipo de balón
-          </button>
+          <button onClick={agregarItem} style={{ width: '100%', padding: '10px', marginBottom: '15px', backgroundColor: 'white', color: COLORS.primary, border: `1px dashed ${COLORS.primary}`, borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>➕ Agregar otro tipo de balón</button>
 
-          <label style={{ display: 'block', fontSize: '13px', color: '#666', marginBottom: '4px', fontWeight: 'bold' }}>
-            Detalles y características del pedido
-          </label>
-          <textarea
-            value={formData.observaciones}
-            onChange={(e) => {
-              if (e.target.value.length <= LIMITE_DETALLES) {
-                setFormData({ ...formData, observaciones: e.target.value });
-              }
-            }}
-            maxLength={LIMITE_DETALLES}
-            rows={4}
-            placeholder="Ej: cliente pide balones con logo bordado en dos caras, empaque individual..."
-            style={{ width: '100%', padding: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit' }}
-          />
-          <p style={{
-            textAlign: 'right',
-            fontSize: '12px',
-            margin: '4px 0 15px 0',
-            color: formData.observaciones.length >= LIMITE_DETALLES ? COLORS.danger : '#999'
-          }}>
-            {formData.observaciones.length}/{LIMITE_DETALLES}
-          </p>
+          <label style={{ display: 'block', fontSize: '13px', color: '#666', marginBottom: '4px', fontWeight: 'bold' }}>Detalles y características del pedido</label>
+          <textarea value={formData.observaciones} onChange={(e) => { if (e.target.value.length <= LIMITE_DETALLES) setFormData({ ...formData, observaciones: e.target.value }); }} maxLength={LIMITE_DETALLES} rows={4} placeholder="Ej: cliente pide balones con logo bordado..." style={{ width: '100%', padding: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit' }} />
+          <p style={{ textAlign: 'right', fontSize: '12px', margin: '4px 0 15px 0', color: formData.observaciones.length >= LIMITE_DETALLES ? COLORS.danger : '#999' }}>{formData.observaciones.length}/{LIMITE_DETALLES}</p>
 
-          <label style={{ display: 'block', fontSize: '13px', color: '#666', marginBottom: '4px', fontWeight: 'bold' }}>
-            Fotografías o imágenes de referencia (PNG o JPG)
-          </label>
-          <input
-            type="file"
-            accept="image/png, image/jpeg"
-            multiple
-            onChange={(e) => { agregarImagenes(e.target.files); e.target.value = ''; }}
-            style={{ width: '100%', padding: '8px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}
-          />
+          <label style={{ display: 'block', fontSize: '13px', color: '#666', marginBottom: '4px', fontWeight: 'bold' }}>Fotografías o imágenes de referencia (PNG o JPG)</label>
+          <input type="file" accept="image/png, image/jpeg" multiple onChange={(e) => { agregarImagenes(e.target.files); e.target.value = ''; }} style={{ width: '100%', padding: '8px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }} />
           {formData.imagenes.length > 0 && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginBottom: '15px' }}>
               {formData.imagenes.map((img, index) => (
                 <div key={index} style={{ position: 'relative', width: '80px' }}>
-                  <img
-                    src={`data:${img.tipo_mime};base64,${img.contenido_base64}`}
-                    alt={img.nombre_archivo}
-                    style={{ width: '80px', height: '80px', objectFit: 'cover', borderRadius: '4px', border: `1px solid ${COLORS.border}` }}
-                  />
-                  <button
-                    onClick={() => quitarImagen(index)}
-                    title="Quitar imagen"
-                    style={{ position: 'absolute', top: '-8px', right: '-8px', width: '20px', height: '20px', borderRadius: '50%', border: 'none', backgroundColor: COLORS.danger, color: 'white', cursor: 'pointer', fontSize: '12px', lineHeight: '20px', padding: 0 }}
-                  >
-                    ✕
-                  </button>
+                  <img src={`data:${img.tipo_mime};base64,${img.contenido_base64}`} alt={img.nombre_archivo} style={{ width: '80px', height: '80px', objectFit: 'cover', borderRadius: '4px', border: `1px solid ${COLORS.border}` }} />
+                  <button onClick={() => quitarImagen(index)} style={{ position: 'absolute', top: '-8px', right: '-8px', width: '20px', height: '20px', borderRadius: '50%', border: 'none', backgroundColor: COLORS.danger, color: 'white', cursor: 'pointer', fontSize: '12px', lineHeight: '20px', padding: 0 }}>✕</button>
                 </div>
               ))}
             </div>
           )}
 
-          <button onClick={crearPedido} style={{ width: '100%', padding: '12px', backgroundColor: COLORS.success, color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>
-            ✅ Crear Pedido
-          </button>
+          <button onClick={crearPedido} style={{ width: '100%', padding: '12px', backgroundColor: COLORS.success, color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>✅ Crear Pedido</button>
         </div>
 
         <h2 style={{ fontSize: '18px', color: COLORS.primary, marginBottom: '15px' }}>Pedidos Registrados ({pedidos.length})</h2>
+        {/* (Se mantiene el listado original de pedidos) */}
         {pedidos.length > 0 ? (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px' }}>
             {pedidos.map(p => (
@@ -429,59 +516,74 @@ export default function App() {
                   <div style={{ margin: '0 0 5px 0' }}>
                     <strong style={{ fontSize: '14px', color: '#666' }}>Balones:</strong>
                     <ul style={{ margin: '4px 0 0 0', paddingLeft: '18px' }}>
-                      {p.balones.map(b => (
-                        <li key={b.id} style={{ fontSize: '13px', color: '#666' }}>{b.tipo_balon_nombre}: {b.cantidad}</li>
-                      ))}
+                      {p.balones.map(b => (<li key={b.id} style={{ fontSize: '13px', color: '#666' }}>{b.tipo_balon_nombre}: {b.cantidad}</li>))}
                     </ul>
                   </div>
                 )}
                 <p style={{ fontSize: '14px', color: '#666', margin: 0 }}><strong>Estado:</strong> {p.estado}</p>
-                {p.observaciones && (
-                  <p style={{ fontSize: '13px', color: '#666', margin: '6px 0 0 0', whiteSpace: 'pre-wrap' }}>
-                    <strong>Detalles:</strong> {p.observaciones}
-                  </p>
-                )}
                 {p.imagenes && p.imagenes.length > 0 && (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '8px' }}>
                     {p.imagenes.map(img => (
-                      <img
-                        key={img.id}
-                        src={`${API_BASE_URL}/pedidos/${p.id}/imagenes/${img.id}`}
-                        alt={img.nombre_archivo}
-                        title={img.nombre_archivo}
-                        style={{ width: '60px', height: '60px', objectFit: 'cover', borderRadius: '4px', border: `1px solid ${COLORS.border}` }}
-                      />
+                      <img key={img.id} src={`${API_BASE_URL}/pedidos/${p.id}/imagenes/${img.id}`} alt={img.nombre_archivo} style={{ width: '60px', height: '60px', objectFit: 'cover', borderRadius: '4px', border: `1px solid ${COLORS.border}` }} />
                     ))}
                   </div>
                 )}
               </div>
             ))}
           </div>
+        ) : (<p style={{ fontSize: '16px', color: '#999' }}>📭 No hay pedidos registrados</p>)}
+      </div>
+    );
+  };
+
+  // ── OPERARIOS (AHORA CON DRILl-DOWN A ANALÍTICA) ─────────────────────────
+
+  const OperariosView = () => {
+    const [operarioSeleccionado, setOperarioSeleccionado] = useState(null);
+
+    return (
+      <div style={{ padding: '30px' }}>
+        <h1 style={{ fontSize: '28px', color: COLORS.primary, marginBottom: '30px' }}>
+          👥 Operarios ({operarios.length}) {operarioSeleccionado && "— Analítica Individual"}
+        </h1>
+        
+        {!operarioSeleccionado ? (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px' }}>
+            {operarios.map(op => (
+              <button 
+                key={op.id} 
+                onClick={() => setOperarioSeleccionado(op.id)}
+                style={{ 
+                  backgroundColor: 'white', 
+                  padding: '15px', 
+                  borderRadius: '8px', 
+                  borderLeft: `5px solid ${COLORS.primary}`, 
+                  border: '1px solid transparent', 
+                  cursor: 'pointer', 
+                  textAlign: 'left', 
+                  width: '100%',
+                  transition: 'all 0.2s'
+                }}
+                onMouseOver={(e) => e.currentTarget.style.borderColor = COLORS.secondary}
+                onMouseOut={(e) => e.currentTarget.style.borderColor = 'transparent'}
+              >
+                <p style={{ fontSize: '16px', fontWeight: 'bold', color: COLORS.primary, margin: '0 0 10px 0' }}>{op.nombre}</p>
+                <p style={{ fontSize: '14px', color: '#666', margin: '0 0 5px 0' }}><strong>Especialidad:</strong> {op.especialidad}</p>
+                <p style={{ fontSize: '14px', color: '#666', margin: 0 }}><strong>Estado:</strong> {op.estado}</p>
+              </button>
+            ))}
+          </div>
         ) : (
-          <p style={{ fontSize: '16px', color: '#999' }}>📭 No hay pedidos registrados</p>
+          <AnaliticaOperarioView 
+            operarioId={operarioSeleccionado} 
+            onBack={() => setOperarioSeleccionado(null)} 
+          />
         )}
       </div>
     );
   };
 
-  const OperariosView = () => (
-    <div style={{ padding: '30px' }}>
-      <h1 style={{ fontSize: '28px', color: COLORS.primary, marginBottom: '30px' }}>👥 Operarios ({operarios.length})</h1>
-      {operarios.length > 0 ? (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px' }}>
-          {operarios.map(op => (
-            <div key={op.id} style={{ backgroundColor: 'white', padding: '15px', borderRadius: '8px', borderLeft: `5px solid ${COLORS.primary}` }}>
-              <p style={{ fontSize: '16px', fontWeight: 'bold', color: COLORS.primary, margin: '0 0 10px 0' }}>{op.nombre}</p>
-              <p style={{ fontSize: '14px', color: '#666', margin: '0 0 5px 0' }}><strong>Especialidad:</strong> {op.especialidad}</p>
-              <p style={{ fontSize: '14px', color: '#666', margin: 0 }}><strong>Estado:</strong> {op.estado}</p>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <p style={{ fontSize: '16px', color: '#999' }}>No hay operarios</p>
-      )}
-    </div>
-  );
+  // ── INVENTARIO ──────────────────────────────────────────────────────────────
 
   const MaterialesView = () => {
     const [editandoId, setEditandoId] = useState(null);
@@ -489,26 +591,16 @@ export default function App() {
 
     const guardarUmbral = async (materialId) => {
       const valor = parseFloat(nuevoUmbral);
-      if (isNaN(valor) || valor < 0) {
-        alert('Ingresa un número válido para el umbral');
-        return;
-      }
+      if (isNaN(valor) || valor < 0) return alert('Ingresa un número válido');
       try {
         const res = await fetch(`${API_BASE_URL}/materiales/${materialId}/umbral`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ umbral_minimo: valor })
         });
-        if (res.ok) {
-          await cargarDatos();
-          setEditandoId(null);
-        } else {
-          const data = await res.json();
-          alert('❌ ' + (data.error || 'No se pudo actualizar el umbral'));
-        }
-      } catch (error) {
-        alert('❌ Error: ' + error.message);
-      }
+        if (res.ok) { await cargarDatos(); setEditandoId(null); } 
+        else alert('❌ Error al actualizar');
+      } catch (error) { alert('❌ Error: ' + error.message); }
     };
 
     return (
@@ -523,42 +615,29 @@ export default function App() {
                 <div key={mat.id} style={{ backgroundColor: 'white', padding: '15px', borderRadius: '8px', borderLeft: `5px solid ${critico ? COLORS.danger : COLORS.success}` }}>
                   <p style={{ fontSize: '16px', fontWeight: 'bold', color: COLORS.primary, margin: '0 0 10px 0' }}>{mat.nombre}</p>
                   <p style={{ fontSize: '14px', color: '#666', margin: '0 0 5px 0' }}><strong>Stock:</strong> {mat.cantidad_disponible} {mat.unidad}</p>
-
                   {editandoId === mat.id ? (
                     <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginTop: '8px' }}>
-                      <input
-                        type="number"
-                        min="0"
-                        value={nuevoUmbral}
-                        onChange={(e) => setNuevoUmbral(e.target.value)}
-                        style={{ width: '80px', padding: '4px', borderRadius: '4px', border: `1px solid ${COLORS.border}` }}
-                      />
+                      <input type="number" min="0" value={nuevoUmbral} onChange={(e) => setNuevoUmbral(e.target.value)} style={{ width: '80px', padding: '4px', borderRadius: '4px', border: `1px solid ${COLORS.border}` }} />
                       <button onClick={() => guardarUmbral(mat.id)} style={{ padding: '4px 8px', border: 'none', borderRadius: '4px', backgroundColor: COLORS.success, color: 'white', cursor: 'pointer' }}>Guardar</button>
                       <button onClick={() => setEditandoId(null)} style={{ padding: '4px 8px', border: 'none', borderRadius: '4px', backgroundColor: '#eee', cursor: 'pointer' }}>✕</button>
                     </div>
                   ) : (
                     <p style={{ fontSize: '13px', color: '#999', margin: '0 0 5px 0' }}>
                       Umbral mínimo: {umbral} {mat.unidad}{' '}
-                      <button
-                        onClick={() => { setEditandoId(mat.id); setNuevoUmbral(String(umbral)); }}
-                        style={{ border: 'none', background: 'transparent', color: COLORS.primary, cursor: 'pointer', textDecoration: 'underline', fontSize: '12px' }}
-                      >
-                        editar
-                      </button>
+                      <button onClick={() => { setEditandoId(mat.id); setNuevoUmbral(String(umbral)); }} style={{ border: 'none', background: 'transparent', color: COLORS.primary, cursor: 'pointer', textDecoration: 'underline', fontSize: '12px' }}>editar</button>
                     </p>
                   )}
-
                   {critico && <p style={{ fontSize: '12px', color: COLORS.danger, fontWeight: 'bold', margin: 0 }}>⚠️ Stock crítico, por debajo del umbral</p>}
                 </div>
               );
             })}
           </div>
-        ) : (
-          <p style={{ fontSize: '16px', color: '#999' }}>No hay materiales</p>
-        )}
+        ) : (<p style={{ fontSize: '16px', color: '#999' }}>No hay materiales</p>)}
       </div>
     );
   };
+
+  // ── TIPOS BALÓN ─────────────────────────────────────────────────────────────
 
   const TiposView = () => {
     const [tipoSeleccionado, setTipoSeleccionado] = useState(null);
@@ -567,203 +646,66 @@ export default function App() {
     const [categoriaFiltro, setCategoriaFiltro] = useState('Todas');
 
     const categorias = ['Todas', ...Array.from(new Set(tiposBalon.map(t => t.categoria || 'Otros')))];
-    const tiposFiltrados = categoriaFiltro === 'Todas'
-      ? tiposBalon
-      : tiposBalon.filter(t => (t.categoria || 'Otros') === categoriaFiltro);
-
-    const COLOR_SEMAFORO = {
-      verde: COLORS.success,
-      amarillo: COLORS.warning,
-      rojo: COLORS.danger
-    };
-
-    const pedidosDelTipo = tipoSeleccionado
-      ? pedidos
-          .map(p => {
-            const item = (p.balones || []).find(b => b.tipo_balon_id === tipoSeleccionado.id);
-            return item ? { ...p, cantidadDeEsteTipo: item.cantidad } : null;
-          })
-          .filter(Boolean)
-      : [];
+    const tiposFiltrados = categoriaFiltro === 'Todas' ? tiposBalon : tiposBalon.filter(t => (t.categoria || 'Otros') === categoriaFiltro);
+    const COLOR_SEMAFORO = { verde: COLORS.success, amarillo: COLORS.warning, rojo: COLORS.danger };
 
     const seleccionarTipo = async (tipo) => {
-      if (tipoSeleccionado && tipoSeleccionado.id === tipo.id) {
-        setTipoSeleccionado(null);
-        setDetalle(null);
-        return;
-      }
-      setTipoSeleccionado(tipo);
-      setDetalle(null);
-      setCargandoDetalle(true);
+      if (tipoSeleccionado && tipoSeleccionado.id === tipo.id) { setTipoSeleccionado(null); setDetalle(null); return; }
+      setTipoSeleccionado(tipo); setDetalle(null); setCargandoDetalle(true);
       try {
         const res = await fetch(`${API_BASE_URL}/tipos-balon/${tipo.id}/metricas`);
         if (res.ok) setDetalle(await res.json());
-      } catch (error) {
-        console.error('Error cargando métricas:', error);
-      } finally {
-        setCargandoDetalle(false);
-      }
+      } catch (error) { console.error('Error cargando métricas:', error); } 
+      finally { setCargandoDetalle(false); }
     };
 
     return (
       <div style={{ padding: '30px' }}>
         <h1 style={{ fontSize: '28px', color: COLORS.primary, marginBottom: '20px' }}>⚽ Tipos de Balones ({tiposFiltrados.length}/{tiposBalon.length})</h1>
-
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '20px' }}>
           {categorias.map(cat => (
-            <button
-              key={cat}
-              onClick={() => setCategoriaFiltro(cat)}
-              style={{
-                padding: '6px 14px',
-                borderRadius: '20px',
-                border: `1px solid ${COLORS.primary}`,
-                backgroundColor: categoriaFiltro === cat ? COLORS.primary : 'white',
-                color: categoriaFiltro === cat ? 'white' : COLORS.primary,
-                cursor: 'pointer',
-                fontSize: '13px',
-                fontWeight: 'bold'
-              }}
-            >
-              {cat}
-            </button>
+            <button key={cat} onClick={() => setCategoriaFiltro(cat)} style={{ padding: '6px 14px', borderRadius: '20px', border: `1px solid ${COLORS.primary}`, backgroundColor: categoriaFiltro === cat ? COLORS.primary : 'white', color: categoriaFiltro === cat ? 'white' : COLORS.primary, cursor: 'pointer', fontSize: '13px', fontWeight: 'bold' }}>{cat}</button>
           ))}
         </div>
-
         {tiposFiltrados.length > 0 ? (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px' }}>
             {tiposFiltrados.map(tipo => {
-              // ---- MODIFICADO: Obtener color del semáforo desde metricas ----
-              const colorSemaforo = tipo.metricas?.semaforo
-                ? COLOR_SEMAFORO[tipo.metricas.semaforo]
-                : COLORS.border;
-              // -------------------------------------------------------------
+              const colorSemaforo = tipo.metricas?.semaforo ? COLOR_SEMAFORO[tipo.metricas.semaforo] : COLORS.border;
               const seleccionado = tipoSeleccionado && tipoSeleccionado.id === tipo.id;
               return (
-                <button
-                  key={tipo.id}
-                  onClick={() => seleccionarTipo(tipo)}
-                  style={{
-                    backgroundColor: 'white',
-                    padding: '20px',
-                    borderRadius: '8px',
-                    // ---- MODIFICADO: borde izquierdo dinámico ----
-                    borderLeft: `6px solid ${colorSemaforo}`,
-                    // ----------------------------------------------
-                    border: seleccionado ? `2px solid ${COLORS.secondary}` : `1px solid ${COLORS.border}`,
-                    borderLeftWidth: '6px',
-                    borderLeftColor: colorSemaforo,
-                    textAlign: 'left',
-                    cursor: 'pointer',
-                    font: 'inherit',
-                    display: 'block',
-                    width: '100%'
-                  }}
-                >
+                <button key={tipo.id} onClick={() => seleccionarTipo(tipo)} style={{ backgroundColor: 'white', padding: '20px', borderRadius: '8px', border: seleccionado ? `2px solid ${COLORS.secondary}` : `1px solid ${COLORS.border}`, borderLeft: `6px solid ${colorSemaforo}`, textAlign: 'left', cursor: 'pointer', font: 'inherit', display: 'block', width: '100%' }}>
                   <p style={{ fontSize: '18px', fontWeight: 'bold', color: COLORS.primary, margin: '0 0 6px 0' }}>{tipo.nombre}</p>
                   <p style={{ fontSize: '12px', color: '#999', margin: '0 0 8px 0' }}>{tipo.categoria || 'Otros'}</p>
-                  {/* ---- MODIFICADO: Mostrar métricas básicas si existen ---- */}
-                  {tipo.metricas && (
-                    <p style={{ fontSize: '13px', color: '#666', margin: 0 }}>
-                      Stock: <strong>{tipo.metricas.stock_actual ?? 0}</strong> · Pendientes: <strong>{tipo.metricas.pendientes ?? 0}</strong>
-                    </p>
-                  )}
-                  {/* ---------------------------------------------------------- */}
-                  {tipo.metricas && (
-                    <p style={{ fontSize: '13px', color: '#666', margin: 0 }}>
-                      Disponibles: <strong>{tipo.metricas.disponibles}</strong> · Pendientes: <strong>{tipo.metricas.pendientes}</strong>
-                    </p>
-                  )}
+                  {tipo.metricas && <p style={{ fontSize: '13px', color: '#666', margin: 0 }}>Stock: <strong>{tipo.metricas.stock_actual ?? 0}</strong> · Pendientes: <strong>{tipo.metricas.pendientes ?? 0}</strong></p>}
+                  {tipo.metricas && <p style={{ fontSize: '13px', color: '#666', margin: 0 }}>Disponibles: <strong>{tipo.metricas.disponibles}</strong> · Pendientes: <strong>{tipo.metricas.pendientes}</strong></p>}
                 </button>
               );
             })}
           </div>
-        ) : (
-          <p style={{ fontSize: '16px', color: '#999' }}>No hay tipos de balones en esta categoría</p>
-        )}
-
+        ) : (<p style={{ fontSize: '16px', color: '#999' }}>No hay tipos de balones en esta categoría</p>)}
         {tipoSeleccionado && (
           <div style={{ marginTop: '30px', backgroundColor: 'white', padding: '20px', borderRadius: '8px' }}>
-            <h2 style={{ fontSize: '20px', color: COLORS.primary, marginBottom: '15px' }}>
-              {tipoSeleccionado.nombre}
-            </h2>
-
+            <h2 style={{ fontSize: '20px', color: COLORS.primary, marginBottom: '15px' }}>{tipoSeleccionado.nombre}</h2>
             {cargandoDetalle && <p style={{ color: '#999' }}>Cargando métricas...</p>}
-
             {detalle && (
               <>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '12px', marginBottom: '20px' }}>
-                  <div style={{ padding: '12px', borderRadius: '6px', backgroundColor: '#f5f5f5', textAlign: 'center' }}>
-                    <p style={{ margin: '0 0 4px 0', fontSize: '12px', color: '#666' }}>Fabricadas</p>
-                    <p style={{ margin: 0, fontSize: '22px', fontWeight: 'bold', color: COLORS.primary }}>{detalle.metricas.fabricadas}</p>
-                  </div>
-                  <div style={{ padding: '12px', borderRadius: '6px', backgroundColor: '#f5f5f5', textAlign: 'center' }}>
-                    <p style={{ margin: '0 0 4px 0', fontSize: '12px', color: '#666' }}>Defectuosas</p>
-                    <p style={{ margin: 0, fontSize: '22px', fontWeight: 'bold', color: COLORS.danger }}>{detalle.metricas.defectuosas}</p>
-                  </div>
-                  <div style={{ padding: '12px', borderRadius: '6px', backgroundColor: '#f5f5f5', textAlign: 'center' }}>
-                    <p style={{ margin: '0 0 4px 0', fontSize: '12px', color: '#666' }}>Entregadas</p>
-                    <p style={{ margin: 0, fontSize: '22px', fontWeight: 'bold', color: COLORS.primary }}>{detalle.metricas.entregadas}</p>
-                  </div>
-                  <div style={{ padding: '12px', borderRadius: '6px', backgroundColor: '#f5f5f5', textAlign: 'center' }}>
-                    <p style={{ margin: '0 0 4px 0', fontSize: '12px', color: '#666' }}>Pendientes</p>
-                    <p style={{ margin: 0, fontSize: '22px', fontWeight: 'bold', color: COLORS.warning }}>{detalle.metricas.pendientes}</p>
-                  </div>
-                  <div style={{ padding: '12px', borderRadius: '6px', backgroundColor: '#f5f5f5', textAlign: 'center', borderTop: `4px solid ${COLOR_SEMAFORO[detalle.metricas.semaforo]}` }}>
-                    <p style={{ margin: '0 0 4px 0', fontSize: '12px', color: '#666' }}>Disponibles</p>
-                    <p style={{ margin: 0, fontSize: '22px', fontWeight: 'bold', color: COLOR_SEMAFORO[detalle.metricas.semaforo] }}>{detalle.metricas.disponibles}</p>
-                  </div>
+                  <div style={{ padding: '12px', borderRadius: '6px', backgroundColor: '#f5f5f5', textAlign: 'center' }}><p style={{ margin: '0 0 4px 0', fontSize: '12px', color: '#666' }}>Fabricadas</p><p style={{ margin: 0, fontSize: '22px', fontWeight: 'bold', color: COLORS.primary }}>{detalle.metricas.fabricadas}</p></div>
+                  <div style={{ padding: '12px', borderRadius: '6px', backgroundColor: '#f5f5f5', textAlign: 'center' }}><p style={{ margin: '0 0 4px 0', fontSize: '12px', color: '#666' }}>Defectuosas</p><p style={{ margin: 0, fontSize: '22px', fontWeight: 'bold', color: COLORS.danger }}>{detalle.metricas.defectuosas}</p></div>
+                  <div style={{ padding: '12px', borderRadius: '6px', backgroundColor: '#f5f5f5', textAlign: 'center' }}><p style={{ margin: '0 0 4px 0', fontSize: '12px', color: '#666' }}>Entregadas</p><p style={{ margin: 0, fontSize: '22px', fontWeight: 'bold', color: COLORS.primary }}>{detalle.metricas.entregadas}</p></div>
+                  <div style={{ padding: '12px', borderRadius: '6px', backgroundColor: '#f5f5f5', textAlign: 'center' }}><p style={{ margin: '0 0 4px 0', fontSize: '12px', color: '#666' }}>Pendientes</p><p style={{ margin: 0, fontSize: '22px', fontWeight: 'bold', color: COLORS.warning }}>{detalle.metricas.pendientes}</p></div>
+                  <div style={{ padding: '12px', borderRadius: '6px', backgroundColor: '#f5f5f5', textAlign: 'center', borderTop: `4px solid ${COLOR_SEMAFORO[detalle.metricas.semaforo]}` }}><p style={{ margin: '0 0 4px 0', fontSize: '12px', color: '#666' }}>Disponibles</p><p style={{ margin: 0, fontSize: '22px', fontWeight: 'bold', color: COLOR_SEMAFORO[detalle.metricas.semaforo] }}>{detalle.metricas.disponibles}</p></div>
                 </div>
-
-                <h3 style={{ fontSize: '15px', color: COLORS.primary, marginBottom: '10px' }}>
-                  📦 Trazabilidad de lotes ({detalle.lotes.length})
-                </h3>
+                <h3 style={{ fontSize: '15px', color: COLORS.primary, marginBottom: '10px' }}>📦 Trazabilidad de lotes ({detalle.lotes.length})</h3>
                 {detalle.lotes.length > 0 ? (
                   <div style={{ maxHeight: '260px', overflowY: 'auto', marginBottom: '20px' }}>
                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
-                      <thead>
-                        <tr style={{ textAlign: 'left', borderBottom: `1px solid ${COLORS.border}` }}>
-                          <th style={{ padding: '6px' }}>Fecha</th>
-                          <th style={{ padding: '6px' }}>Operario</th>
-                          <th style={{ padding: '6px' }}>Buenas</th>
-                          <th style={{ padding: '6px' }}>Defectuosas</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {detalle.lotes.map(l => (
-                          <tr key={l.id} style={{ borderBottom: `1px solid ${COLORS.border}` }}>
-                            <td style={{ padding: '6px' }}>{new Date(l.fecha).toLocaleDateString('es-CO')}</td>
-                            <td style={{ padding: '6px' }}>{l.operario_nombre}</td>
-                            <td style={{ padding: '6px', color: COLORS.success }}>{l.unidades_buenas}</td>
-                            <td style={{ padding: '6px', color: (l.unidades_defectuosas || 0) > 0 ? COLORS.danger : '#999' }}>{l.unidades_defectuosas}</td>
-                          </tr>
-                        ))}
-                      </tbody>
+                      <thead><tr style={{ textAlign: 'left', borderBottom: `1px solid ${COLORS.border}` }}><th style={{ padding: '6px' }}>Fecha</th><th style={{ padding: '6px' }}>Operario</th><th style={{ padding: '6px' }}>Buenas</th><th style={{ padding: '6px' }}>Defectuosas</th></tr></thead>
+                      <tbody>{detalle.lotes.map(l => (<tr key={l.id} style={{ borderBottom: `1px solid ${COLORS.border}` }}><td style={{ padding: '6px' }}>{new Date(l.fecha).toLocaleDateString('es-CO')}</td><td style={{ padding: '6px' }}>{l.operario_nombre}</td><td style={{ padding: '6px', color: COLORS.success }}>{l.unidades_buenas}</td><td style={{ padding: '6px', color: (l.unidades_defectuosas || 0) > 0 ? COLORS.danger : '#999' }}>{l.unidades_defectuosas}</td></tr>))}</tbody>
                     </table>
                   </div>
-                ) : (
-                  <p style={{ fontSize: '13px', color: '#999', marginBottom: '20px' }}>
-                    Todavía no hay producción registrada para esta referencia. Al registrar producción, selecciona el tipo de balón para que empiece a contar aquí.
-                  </p>
-                )}
+                ) : (<p style={{ fontSize: '13px', color: '#999', marginBottom: '20px' }}>Todavía no hay producción registrada para esta referencia.</p>)}
               </>
-            )}
-
-            <h3 style={{ fontSize: '15px', color: COLORS.primary, marginBottom: '10px' }}>
-              Pedidos de esta referencia ({pedidosDelTipo.length})
-            </h3>
-            {pedidosDelTipo.length > 0 ? (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '15px' }}>
-                {pedidosDelTipo.map(p => (
-                  <div key={p.id} style={{ padding: '15px', borderRadius: '6px', border: `1px solid ${COLORS.border}`, borderLeft: `4px solid ${COLORS.secondary}` }}>
-                    <p style={{ margin: '0 0 6px 0', fontWeight: 'bold', color: COLORS.primary }}>Pedido: {p.numero_pedido}</p>
-                    <p style={{ margin: '0 0 4px 0' }}>Cliente: {p.cliente}</p>
-                    <p style={{ margin: 0 }}>Balones pedidos: {p.cantidadDeEsteTipo}</p>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p style={{ fontSize: '14px', color: '#999' }}>Aún no hay pedidos con este tipo de balón</p>
             )}
           </div>
         )}
@@ -771,12 +713,15 @@ export default function App() {
     );
   };
 
+  // ── PRODUCCIÓN ──────────────────────────────────────────────────────────────
+
   const ProduccionView = () => {
     const [form, setForm] = useState({
       operario_id: '',
       tarea_id: '',
       pedido_id: '',
       tipo_balon_id: '',
+      complejidad_estilo: '32 cascos', // NUEVO para HU-12
       unidades_buenas: 1,
       unidades_defectuosas: 0,
       fecha: new Date().toISOString().slice(0, 10),
@@ -790,9 +735,7 @@ export default function App() {
 
     useEffect(() => {
       if (!cronometroActivo || !horaInicioCrono) return;
-      const intervalo = setInterval(() => {
-        setSegundosTranscurridos(Math.floor((new Date() - horaInicioCrono) / 1000));
-      }, 1000);
+      const intervalo = setInterval(() => { setSegundosTranscurridos(Math.floor((new Date() - horaInicioCrono) / 1000)); }, 1000);
       return () => clearInterval(intervalo);
     }, [cronometroActivo, horaInicioCrono]);
 
@@ -800,39 +743,22 @@ export default function App() {
       const h = Math.floor(totalSegundos / 3600);
       const m = Math.floor((totalSegundos % 3600) / 60);
       const s = totalSegundos % 60;
-      return h > 0
-        ? `${h}h ${String(m).padStart(2, '0')}m ${String(s).padStart(2, '0')}s`
-        : `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+      return h > 0 ? `${h}h ${String(m).padStart(2, '0')}m ${String(s).padStart(2, '0')}s` : `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
     };
 
     const iniciarCronometro = () => {
-      if (!form.operario_id || !form.tarea_id) {
-        alert('Selecciona operario y tarea antes de iniciar el cronómetro');
-        return;
-      }
-      const ahora = new Date();
-      setHoraInicioCrono(ahora);
-      setHoraFinCrono(null);
-      setSegundosTranscurridos(0);
-      setCronometroActivo(true);
+      if (!form.operario_id || !form.tarea_id) return alert('Selecciona operario y tarea antes de iniciar el cronómetro');
+      const ahora = new Date(); setHoraInicioCrono(ahora); setHoraFinCrono(null); setSegundosTranscurridos(0); setCronometroActivo(true);
     };
 
-    const detenerCronometro = () => {
-      setHoraFinCrono(new Date());
-      setCronometroActivo(false);
-    };
+    const detenerCronometro = () => { setHoraFinCrono(new Date()); setCronometroActivo(false); };
 
     const totalUnidades = (parseFloat(form.unidades_buenas) || 0) + (parseFloat(form.unidades_defectuosas) || 0);
 
     const registrarProduccion = async () => {
-      if (!form.operario_id || !form.tarea_id) {
-        alert('Seleccione operario y tarea');
-        return;
-      }
-      if (totalUnidades <= 0) {
-        alert('Registra al menos una unidad (buena o defectuosa)');
-        return;
-      }
+      if (!form.operario_id || !form.tarea_id) return alert('Seleccione operario y tarea');
+      if (!form.tipo_balon_id) return alert('Selecciona el tipo de balón (obligatorio)');
+      if (totalUnidades <= 0) return alert('Registra al menos una unidad');
 
       const payload = { ...form };
       if (horaInicioCrono && horaFinCrono) {
@@ -846,247 +772,123 @@ export default function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
-
         if (res.ok) {
           alert('✅ Producción registrada');
           await cargarDatos();
           setForm({
-            operario_id: '',
-            tarea_id: '',
-            pedido_id: '',
-            tipo_balon_id: '',
-            unidades_buenas: 1,
-            unidades_defectuosas: 0,
-            fecha: new Date().toISOString().slice(0, 10),
-            observaciones: ''
+            operario_id: '', tarea_id: '', pedido_id: '', tipo_balon_id: '', complejidad_estilo: '32 cascos',
+            unidades_buenas: 1, unidades_defectuosas: 0, fecha: new Date().toISOString().slice(0, 10), observaciones: ''
           });
-          setHoraInicioCrono(null);
-          setHoraFinCrono(null);
-          setSegundosTranscurridos(0);
+          setHoraInicioCrono(null); setHoraFinCrono(null); setSegundosTranscurridos(0);
         } else {
           const data = await res.json();
           alert('❌ ' + (data.error || 'Error al registrar'));
         }
-      } catch (error) {
-        alert('❌ Error: ' + error.message);
-      }
+      } catch (error) { alert('❌ Error: ' + error.message); }
     };
 
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-const tiempoPromedioPorOperario = React.useMemo(() => {
-  const acumulado = {};
-  produccion.forEach(p => {
-    if (!p.duracion_segundos) return;
-    if (!acumulado[p.operario_nombre]) {
-      acumulado[p.operario_nombre] = { total: 0, cantidad: 0 };
-    }
-    acumulado[p.operario_nombre].total += p.duracion_segundos;
-    acumulado[p.operario_nombre].cantidad += 1;
-  });
-  return Object.entries(acumulado).map(([nombre, { total, cantidad }]) => ({
-    nombre,
-    promedioSegundos: Math.round(total / cantidad),
-    registros: cantidad
-  }));
-}, []);
-    // -------------------------------------------
+    const tiempoPromedioPorOperario = React.useMemo(() => {
+      const acumulado = {};
+      produccion.forEach(p => {
+        if (!p.duracion_segundos) return;
+        if (!acumulado[p.operario_nombre]) acumulado[p.operario_nombre] = { total: 0, cantidad: 0 };
+        acumulado[p.operario_nombre].total += p.duracion_segundos;
+        acumulado[p.operario_nombre].cantidad += 1;
+      });
+      return Object.entries(acumulado).map(([nombre, { total, cantidad }]) => ({ nombre, promedioSegundos: Math.round(total / cantidad), registros: cantidad }));
+    }, []);
 
     return (
       <div style={{ padding: '30px' }}>
-        <h1 style={{ fontSize: '28px', color: COLORS.primary, marginBottom: '30px' }}>
-          📝 Registro de Producción
-        </h1>
-
+        <h1 style={{ fontSize: '28px', color: COLORS.primary, marginBottom: '30px' }}>📝 Registro de Producción</h1>
         <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '8px', marginBottom: '30px' }}>
-          <h2 style={{ fontSize: '18px', color: COLORS.primary, marginBottom: '20px' }}>
-            Nueva Tarea Realizada
-          </h2>
+          <h2 style={{ fontSize: '18px', color: COLORS.primary, marginBottom: '20px' }}>Nueva Tarea Realizada</h2>
 
-          <select
-            value={form.operario_id}
-            onChange={(e) => setForm({ ...form, operario_id: e.target.value })}
-            disabled={cronometroActivo}
-            style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box', opacity: cronometroActivo ? 0.6 : 1 }}
-          >
+          <select value={form.operario_id} onChange={(e) => setForm({ ...form, operario_id: e.target.value })} disabled={cronometroActivo} style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box', opacity: cronometroActivo ? 0.6 : 1 }}>
             <option value="">-- Seleccionar Operario --</option>
-            {operarios.map(op => (
-              <option key={op.id} value={op.id}>{op.nombre}</option>
-            ))}
+            {operarios.map(op => (<option key={op.id} value={op.id}>{op.nombre}</option>))}
           </select>
 
-          <select
-            value={form.tarea_id}
-            onChange={(e) => setForm({ ...form, tarea_id: e.target.value })}
-            disabled={cronometroActivo}
-            style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box', opacity: cronometroActivo ? 0.6 : 1 }}
-          >
+          <select value={form.tarea_id} onChange={(e) => setForm({ ...form, tarea_id: e.target.value })} disabled={cronometroActivo} style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box', opacity: cronometroActivo ? 0.6 : 1 }}>
             <option value="">-- Seleccionar Tarea --</option>
-            {tareas.map(t => (
-              <option key={t.id} value={t.id}>{t.nombre}</option>
-            ))}
+            {tareas.map(t => (<option key={t.id} value={t.id}>{t.nombre}</option>))}
           </select>
 
-          <select
-            value={form.pedido_id}
-            onChange={(e) => setForm({ ...form, pedido_id: e.target.value })}
-            style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}
-          >
+          <select value={form.pedido_id} onChange={(e) => setForm({ ...form, pedido_id: e.target.value })} style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}>
             <option value="">-- Pedido (opcional) --</option>
-            {pedidos.map(p => (
-              <option key={p.id} value={p.id}>{p.numero_pedido} - {p.cliente}</option>
-            ))}
+            {pedidos.map(p => (<option key={p.id} value={p.id}>{p.numero_pedido} - {p.cliente}</option>))}
           </select>
 
-          <select
-            value={form.tipo_balon_id}
-            onChange={(e) => setForm({ ...form, tipo_balon_id: e.target.value })}
-            style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}
-          >
-            <option value="">-- Tipo de balón (opcional, pero recomendado) --</option>
-            {tiposBalon.map(t => (
-              <option key={t.id} value={t.id}>{t.nombre}</option>
-            ))}
+          <select value={form.tipo_balon_id} onChange={(e) => setForm({ ...form, tipo_balon_id: e.target.value })} style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}>
+            <option value="">-- Tipo de balón (Obligatorio) --</option>
+            {tiposBalon.map(t => (<option key={t.id} value={t.id}>{t.nombre}</option>))}
           </select>
-          <p style={{ fontSize: '11px', color: '#999', margin: '-6px 0 10px 0' }}>
-            Selecciónalo para que esta producción cuente en "Tipos Balón" (fabricadas, disponibles, trazabilidad).
-          </p>
 
-          <div style={{
-            backgroundColor: cronometroActivo ? '#fff3cd' : '#f5f5f5',
-            border: `1px solid ${cronometroActivo ? COLORS.warning : COLORS.border}`,
-            borderRadius: '4px',
-            padding: '12px',
-            marginBottom: '15px',
-            textAlign: 'center'
-          }}>
-            <p style={{ margin: '0 0 8px 0', fontSize: '13px', color: '#666', fontWeight: 'bold' }}>
-              ⏱️ Cronómetro de tarea
-            </p>
-            <p style={{ margin: '0 0 10px 0', fontSize: '26px', fontFamily: 'monospace', color: COLORS.primary }}>
-              {formatearTiempo(segundosTranscurridos)}
-            </p>
+          {/* NUEVO CAMPO: Complejidad HU-12 */}
+          <label style={{ display: 'block', fontSize: '13px', color: '#666', marginBottom: '4px', fontWeight: 'bold' }}>Estilo de Termosellado</label>
+          <select value={form.complejidad_estilo} onChange={(e) => setForm({ ...form, complejidad_estilo: e.target.value })} style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}>
+            <option value="32 cascos">32 Cascos (Complejidad Alta)</option>
+            <option value="4 piezas">4 Piezas (Complejidad Estándar)</option>
+          </select>
+
+          <div style={{ backgroundColor: cronometroActivo ? '#fff3cd' : '#f5f5f5', border: `1px solid ${cronometroActivo ? COLORS.warning : COLORS.border}`, borderRadius: '4px', padding: '12px', marginBottom: '15px', textAlign: 'center' }}>
+            <p style={{ margin: '0 0 8px 0', fontSize: '13px', color: '#666', fontWeight: 'bold' }}>⏱️ Cronómetro de tarea</p>
+            <p style={{ margin: '0 0 10px 0', fontSize: '26px', fontFamily: 'monospace', color: COLORS.primary }}>{formatearTiempo(segundosTranscurridos)}</p>
             {!cronometroActivo ? (
-              <button
-                onClick={iniciarCronometro}
-                style={{ padding: '8px 16px', border: 'none', borderRadius: '4px', backgroundColor: COLORS.success, color: 'white', cursor: 'pointer', fontWeight: 'bold' }}
-              >
-                ▶️ Iniciar cronómetro
-              </button>
+              <button onClick={iniciarCronometro} style={{ padding: '8px 16px', border: 'none', borderRadius: '4px', backgroundColor: COLORS.success, color: 'white', cursor: 'pointer', fontWeight: 'bold' }}>▶️ Iniciar cronómetro</button>
             ) : (
-              <button
-                onClick={detenerCronometro}
-                style={{ padding: '8px 16px', border: 'none', borderRadius: '4px', backgroundColor: COLORS.danger, color: 'white', cursor: 'pointer', fontWeight: 'bold' }}
-              >
-                ⏹️ Detener
-              </button>
+              <button onClick={detenerCronometro} style={{ padding: '8px 16px', border: 'none', borderRadius: '4px', backgroundColor: COLORS.danger, color: 'white', cursor: 'pointer', fontWeight: 'bold' }}>⏹️ Detener</button>
             )}
-            {horaInicioCrono && horaFinCrono && (
-              <p style={{ margin: '10px 0 0 0', fontSize: '12px', color: '#666' }}>
-                Tiempo capturado: {formatearTiempo(segundosTranscurridos)} — se guardará junto con este registro.
-              </p>
-            )}
+            {horaInicioCrono && horaFinCrono && <p style={{ margin: '10px 0 0 0', fontSize: '12px', color: '#666' }}>Tiempo capturado: {formatearTiempo(segundosTranscurridos)} — se guardará junto con este registro.</p>}
           </div>
 
-          <label style={{ display: 'block', fontSize: '13px', color: '#666', marginBottom: '4px', fontWeight: 'bold' }}>
-            Unidades buenas
-          </label>
-          <input
-            type="number"
-            min="0"
-            step="0.5"
-            value={form.unidades_buenas}
-            onChange={(e) => setForm({ ...form, unidades_buenas: e.target.value })}
-            placeholder="Unidades buenas"
-            style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}
-          />
+          <label style={{ display: 'block', fontSize: '13px', color: '#666', marginBottom: '4px', fontWeight: 'bold' }}>Unidades buenas</label>
+          <input type="number" min="0" step="0.5" value={form.unidades_buenas} onChange={(e) => setForm({ ...form, unidades_buenas: e.target.value })} style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }} />
 
-          <label style={{ display: 'block', fontSize: '13px', color: '#666', marginBottom: '4px', fontWeight: 'bold' }}>
-            Unidades defectuosas
-          </label>
-          <input
-            type="number"
-            min="0"
-            step="0.5"
-            value={form.unidades_defectuosas}
-            onChange={(e) => setForm({ ...form, unidades_defectuosas: e.target.value })}
-            placeholder="Unidades defectuosas"
-            style={{ width: '100%', padding: '10px', marginBottom: '4px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}
-          />
-          <p style={{ fontSize: '13px', color: '#999', margin: '0 0 10px 0' }}>
-            Total de unidades: <strong>{totalUnidades}</strong>
-          </p>
+          <label style={{ display: 'block', fontSize: '13px', color: '#666', marginBottom: '4px', fontWeight: 'bold' }}>Unidades defectuosas</label>
+          <input type="number" min="0" step="0.5" value={form.unidades_defectuosas} onChange={(e) => setForm({ ...form, unidades_defectuosas: e.target.value })} style={{ width: '100%', padding: '10px', marginBottom: '4px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }} />
+          <p style={{ fontSize: '13px', color: '#999', margin: '0 0 10px 0' }}>Total de unidades: <strong>{totalUnidades}</strong></p>
 
-          <input
-            type="date"
-            value={form.fecha}
-            onChange={(e) => setForm({ ...form, fecha: e.target.value })}
-            style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}
-          />
-
-          <textarea
-            value={form.observaciones}
-            onChange={(e) => setForm({ ...form, observaciones: e.target.value })}
-            placeholder="Observaciones (opcional)"
-            style={{ width: '100%', padding: '10px', marginBottom: '15px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box', minHeight: '60px' }}
-          />
-
-          <button
-            onClick={registrarProduccion}
-            style={{ width: '100%', padding: '12px', backgroundColor: COLORS.success, color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
-          >
-            ✅ Registrar Producción
-          </button>
+          <input type="date" value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }} />
+          <textarea value={form.observaciones} onChange={(e) => setForm({ ...form, observaciones: e.target.value })} placeholder="Observaciones (opcional)" style={{ width: '100%', padding: '10px', marginBottom: '15px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box', minHeight: '60px' }} />
+          <button onClick={registrarProduccion} style={{ width: '100%', padding: '12px', backgroundColor: COLORS.success, color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>✅ Registrar Producción</button>
         </div>
 
         {tiempoPromedioPorOperario.length > 0 && (
           <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '8px', marginBottom: '30px' }}>
-            <h2 style={{ fontSize: '18px', color: COLORS.primary, marginBottom: '15px' }}>
-              ⏱️ Tiempo promedio por operario
-            </h2>
+            <h2 style={{ fontSize: '18px', color: COLORS.primary, marginBottom: '15px' }}>⏱️ Tiempo promedio por operario</h2>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '15px' }}>
               {tiempoPromedioPorOperario.map(t => (
                 <div key={t.nombre} style={{ padding: '12px', borderRadius: '6px', border: `1px solid ${COLORS.border}`, borderLeft: `4px solid ${COLORS.warning}` }}>
                   <p style={{ margin: '0 0 4px 0', fontWeight: 'bold', color: COLORS.primary }}>{t.nombre}</p>
-                  <p style={{ margin: 0, fontSize: '14px', color: '#666' }}>
-                    Promedio: <strong>{formatearTiempo(t.promedioSegundos)}</strong> ({t.registros} {t.registros === 1 ? 'registro' : 'registros'} con tiempo)
-                  </p>
+                  <p style={{ margin: 0, fontSize: '14px', color: '#666' }}>Promedio: <strong>{formatearTiempo(t.promedioSegundos)}</strong> ({t.registros} registros)</p>
                 </div>
               ))}
             </div>
           </div>
         )}
 
-        <h2 style={{ fontSize: '18px', color: COLORS.primary, marginBottom: '15px' }}>
-          Últimos Registros ({produccion.length})
-        </h2>
+        <h2 style={{ fontSize: '18px', color: COLORS.primary, marginBottom: '15px' }}>Últimos Registros ({produccion.length})</h2>
         {produccion.length > 0 ? (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px' }}>
             {produccion.map(p => (
               <div key={p.id} style={{ backgroundColor: 'white', padding: '15px', borderRadius: '8px', borderLeft: `5px solid ${COLORS.secondary}` }}>
-                <p style={{ fontSize: '14px', color: '#666', margin: '0 0 5px 0' }}>
-                  <strong>{new Date(p.fecha).toLocaleDateString('es-CO')}</strong>
-                </p>
+                <p style={{ fontSize: '14px', color: '#666', margin: '0 0 5px 0' }}><strong>{new Date(p.fecha).toLocaleDateString('es-CO')}</strong></p>
                 <p style={{ fontSize: '16px', fontWeight: 'bold', margin: '0 0 5px 0' }}>{p.operario_nombre}</p>
                 <p style={{ fontSize: '14px', color: '#666', margin: '0 0 5px 0' }}>Tarea: {p.tarea_nombre}</p>
-                <p style={{ fontSize: '14px', color: '#666', margin: '0' }}>
-                  Buenas: <strong style={{ color: COLORS.success }}>{p.unidades_buenas ?? p.cantidad}</strong>
-                  {' · '}
-                  Defectuosas: <strong style={{ color: (p.unidades_defectuosas || 0) > 0 ? COLORS.danger : '#666' }}>{p.unidades_defectuosas ?? 0}</strong>
-                </p>
+                <p style={{ fontSize: '14px', color: '#666', margin: '0' }}>Buenas: <strong style={{ color: COLORS.success }}>{p.unidades_buenas ?? p.cantidad}</strong> {' · '} Defectuosas: <strong style={{ color: (p.unidades_defectuosas || 0) > 0 ? COLORS.danger : '#666' }}>{p.unidades_defectuosas ?? 0}</strong></p>
                 <p style={{ fontSize: '12px', color: '#999', margin: '2px 0 0 0' }}>Total: {p.cantidad}</p>
-                {p.duracion_segundos != null && (
-                  <p style={{ fontSize: '12px', color: COLORS.primary, margin: '4px 0 0 0' }}>⏱️ Duración: {formatearTiempo(p.duracion_segundos)}</p>
-                )}
+                {p.duracion_segundos != null && <p style={{ fontSize: '12px', color: COLORS.primary, margin: '4px 0 0 0' }}>⏱️ Duración: {formatearTiempo(p.duracion_segundos)}</p>}
                 {p.pedido_numero && <p style={{ fontSize: '12px', color: '#999', marginTop: '5px' }}>Pedido: {p.pedido_numero}</p>}
               </div>
             ))}
           </div>
-        ) : (
-          <p style={{ fontSize: '16px', color: '#999' }}>📭 No hay registros de producción</p>
-        )}
+        ) : (<p style={{ fontSize: '16px', color: '#999' }}>📭 No hay registros de producción</p>)}
       </div>
     );
   };
+
+  // ── MAIN RENDER ─────────────────────────────────────────────────────────────
 
   return (
     <div style={{ display: 'flex', height: '100vh', backgroundColor: COLORS.light, fontFamily: 'Arial, sans-serif' }}>
@@ -1095,7 +897,6 @@ const tiempoPromedioPorOperario = React.useMemo(() => {
           <h1 style={{ fontSize: '24px', fontWeight: 'bold', margin: '0 0 5px 0' }}>TRILAK</h1>
           <p style={{ fontSize: '12px', margin: 0, opacity: 0.8 }}>Sistema de Gestión</p>
         </div>
-
         <nav style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
           {[
             { id: 'dashboard', label: 'Dashboard', icon: '📊' },
@@ -1127,9 +928,7 @@ const tiempoPromedioPorOperario = React.useMemo(() => {
 
         <div style={{ flex: 1, overflowY: 'auto', backgroundColor: COLORS.light }}>
           {cargando ? (
-            <div style={{ padding: '30px', textAlign: 'center' }}>
-              <p style={{ fontSize: '16px', color: '#999' }}>⏳ Cargando datos...</p>
-            </div>
+            <div style={{ padding: '30px', textAlign: 'center' }}><p style={{ fontSize: '16px', color: '#999' }}>⏳ Cargando datos...</p></div>
           ) : (
             <>
               {currentView === 'dashboard' && <DashboardView />}
