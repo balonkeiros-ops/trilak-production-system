@@ -55,9 +55,12 @@ INVENTARIO_DB_PATH = os.path.join(
 class TipoBalon(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     nombre = db.Column(db.String(100), unique=True, nullable=False)
+    # Punto 6 del requerimiento (filtros por línea): categoría manual,
+    # clasificada a partir del nombre en CATEGORIAS_TIPO_BALON (ver abajo).
+    categoria = db.Column(db.String(50), default='Otros')
 
     def to_dict(self):
-        return {'id': self.id, 'nombre': self.nombre}
+        return {'id': self.id, 'nombre': self.nombre, 'categoria': self.categoria}
 
 
 class Operario(db.Model):
@@ -303,6 +306,14 @@ class Produccion(db.Model):
     operario_id = db.Column(db.Integer, db.ForeignKey('operario.id'), nullable=False)
     tarea_id = db.Column(db.Integer, db.ForeignKey('tarea.id'), nullable=False)
     pedido_id = db.Column(db.Integer, db.ForeignKey('pedido.id'), nullable=True)
+    # Épica de inventario de producto terminado: a qué referencia de balón
+    # corresponde este registro. Es indispensable porque un pedido puede
+    # tener VARIOS tipos de balón mezclados (ver PedidoBalon) -- con solo
+    # pedido_id no había forma de saber cuántas de esas unidades eran de
+    # cada referencia. Nullable porque puede haber producción para stock
+    # sin pedido asociado todavía, y para no romper registros históricos
+    # creados antes de este campo.
+    tipo_balon_id = db.Column(db.Integer, db.ForeignKey('tipo_balon.id'), nullable=True)
     # 'cantidad' se mantiene por compatibilidad con pantallas/reportes
     # antiguos: siempre es el TOTAL (unidades_buenas + unidades_defectuosas).
     cantidad = db.Column(db.Float, default=1)
@@ -322,6 +333,7 @@ class Produccion(db.Model):
     operario = db.relationship('Operario', backref='producciones')
     tarea = db.relationship('Tarea', backref='producciones')
     pedido = db.relationship('Pedido')
+    tipo_balon = db.relationship('TipoBalon')
 
     def to_dict(self):
         return {
@@ -332,6 +344,8 @@ class Produccion(db.Model):
             'tarea_nombre': self.tarea.nombre if self.tarea else None,
             'pedido_id': self.pedido_id,
             'pedido_numero': self.pedido.numero_pedido if self.pedido else None,
+            'tipo_balon_id': self.tipo_balon_id,
+            'tipo_balon_nombre': self.tipo_balon.nombre if self.tipo_balon else None,
             'cantidad': self.cantidad,
             'unidades_buenas': self.unidades_buenas,
             'unidades_defectuosas': self.unidades_defectuosas,
@@ -410,6 +424,39 @@ def registrar_salida_inventario(nombre_material: str, cantidad: float, referenci
 
 # ======================== INICIALIZAR BD ========================
 
+# Punto 6 del requerimiento de inventario de producto terminado: categoría
+# por línea para poder filtrar. Clasificado a mano según lo que pidió el
+# usuario (fútbol, fútbol sala/microfútbol, voleibol, baloncesto, otros).
+# Se usa tanto para crear los tipos de balón nuevos como para reclasificar
+# los que ya existían en la base de datos (ver migrar_columnas_faltantes).
+CATEGORIAS_TIPO_BALON = {
+    'Balon Futbol #5 32 CASCOS': 'Fútbol',
+    'Balon Futbol #4 32 CASCOS': 'Fútbol',
+    'Balon Futbol #3 32 CASCOS': 'Fútbol',
+    'Balon Futbol #2 32 CASCOS': 'Fútbol',
+    'Balon Futbol #1 32 CASCOS': 'Fútbol',
+    'Balon Futbol mini 32 CASCOS': 'Fútbol',
+    'Balon Futbol Sala 32 CASCOS': 'Fútbol Sala / Microfútbol',
+    'Balon Micro Futbol 32 CASCOS': 'Fútbol Sala / Microfútbol',
+    'Balon Futbol #5 BRAIN': 'Fútbol',
+    'Balon Futbol #4 BRAIN': 'Fútbol',
+    'Balon Futbol #3 BRAIN': 'Fútbol',
+    'Balon Futbol #5 Bola 8': 'Fútbol',
+    'Balon Futbol #4 Bola 8': 'Fútbol',
+    'Balon Futbol #3 Bola 8': 'Fútbol',
+    'Balon Futbol #5 Sportik': 'Fútbol',
+    'Balon Futbol #4 Sportik': 'Fútbol',
+    'Balon Futbol #3 Sportik': 'Fútbol',
+    'OTRO BAlon fuera de Referncia': 'Otros',
+    'Balon Voley Ball': 'Voleibol',
+    'Balon Voley Ball Mini': 'Voleibol',
+    'Balon Baloncesto #7': 'Baloncesto',
+    'Balon Baloncesto #6': 'Baloncesto',
+    'Balon Baloncesto #5': 'Baloncesto',
+    'Balon Baloncesto #3': 'Baloncesto',
+}
+
+
 def inicializar_datos():
     """Carga datos iniciales en la base de datos."""
 
@@ -478,7 +525,10 @@ def inicializar_datos():
 
     for nombre in tipos_balon:
         if not TipoBalon.query.filter_by(nombre=nombre).first():
-            db.session.add(TipoBalon(nombre=nombre))
+            db.session.add(TipoBalon(
+                nombre=nombre,
+                categoria=CATEGORIAS_TIPO_BALON.get(nombre, 'Otros')
+            ))
 
     for nombre in operarios:
         if not Operario.query.filter_by(nombre=nombre).first():
@@ -544,10 +594,90 @@ def login_required(f):
 
 # ======================== RUTAS API ========================
 
+def calcular_metricas_tipo_balon(tipo_balon_id):
+    """
+    Épica de inventario de producto terminado / Historia 1.
+
+    - fabricadas: unidades buenas producidas de esta referencia (histórico).
+    - defectuosas: unidades defectuosas producidas de esta referencia.
+    - entregadas: unidades comprometidas en pedidos YA completados (según lo
+      definido con el usuario: el pedido se entrega completo, no por
+      referencia individual dentro de él).
+    - pendientes: unidades comprometidas en pedidos activos (no completados).
+    - disponibles: fabricadas - entregadas (nunca negativo).
+    - semaforo: 'rojo' si no alcanza para cubrir lo pendiente, 'amarillo' si
+      apenas alcanza (margen menor al 20%), 'verde' si hay holgura.
+    """
+    fabricadas = db.session.query(
+        db.func.coalesce(db.func.sum(Produccion.unidades_buenas), 0)
+    ).filter(Produccion.tipo_balon_id == tipo_balon_id).scalar()
+
+    defectuosas = db.session.query(
+        db.func.coalesce(db.func.sum(Produccion.unidades_defectuosas), 0)
+    ).filter(Produccion.tipo_balon_id == tipo_balon_id).scalar()
+
+    entregadas = db.session.query(
+        db.func.coalesce(db.func.sum(PedidoBalon.cantidad), 0)
+    ).join(Pedido, PedidoBalon.pedido_id == Pedido.id).filter(
+        PedidoBalon.tipo_balon_id == tipo_balon_id,
+        Pedido.estado == 'completado'
+    ).scalar()
+
+    pendientes = db.session.query(
+        db.func.coalesce(db.func.sum(PedidoBalon.cantidad), 0)
+    ).join(Pedido, PedidoBalon.pedido_id == Pedido.id).filter(
+        PedidoBalon.tipo_balon_id == tipo_balon_id,
+        Pedido.estado != 'completado'
+    ).scalar()
+
+    disponibles = max(0.0, fabricadas - entregadas)
+
+    if pendientes > disponibles:
+        semaforo = 'rojo'
+    elif pendientes > 0 and disponibles < pendientes * 1.2:
+        semaforo = 'amarillo'
+    else:
+        semaforo = 'verde'
+
+    return {
+        'fabricadas': fabricadas,
+        'defectuosas': defectuosas,
+        'entregadas': entregadas,
+        'pendientes': pendientes,
+        'disponibles': disponibles,
+        'semaforo': semaforo
+    }
+
+
 @app.route('/api/tipos-balon', methods=['GET'])
 def get_tipos_balon():
     tipos = TipoBalon.query.all()
-    return jsonify([t.to_dict() for t in tipos])
+    resultado = []
+    for t in tipos:
+        item = t.to_dict()
+        item['metricas'] = calcular_metricas_tipo_balon(t.id)
+        resultado.append(item)
+    return jsonify(resultado)
+
+
+@app.route('/api/tipos-balon/<int:tipo_balon_id>/metricas', methods=['GET'])
+def get_metricas_tipo_balon(tipo_balon_id):
+    """
+    Historia 1 completa + Punto 7 (trazabilidad de lotes): detalle de una
+    referencia al hacer clic, incluyendo el histórico de registros de
+    producción (operario, fecha, buenas/defectuosas) para auditoría rápida.
+    """
+    tipo = TipoBalon.query.get_or_404(tipo_balon_id)
+    metricas = calcular_metricas_tipo_balon(tipo_balon_id)
+
+    lotes = Produccion.query.filter_by(tipo_balon_id=tipo_balon_id) \
+        .order_by(Produccion.fecha.desc()).all()
+
+    return jsonify({
+        'tipo_balon': tipo.to_dict(),
+        'metricas': metricas,
+        'lotes': [l.to_dict() for l in lotes]
+    })
 
 
 @app.route('/api/inicializar', methods=['POST'])
@@ -893,6 +1023,10 @@ def produccion_route():
         if not tarea:
             return jsonify({'error': 'Tarea no encontrada'}), 400
 
+        tipo_balon_id = data.get('tipo_balon_id') or None
+        if tipo_balon_id and not TipoBalon.query.get(tipo_balon_id):
+            return jsonify({'error': 'Tipo de balón no encontrado'}), 400
+
         # Historia 4: desglose de calidad. Si el frontend manda
         # unidades_buenas/unidades_defectuosas se usan esas; si no (pantallas
         # antiguas que solo mandan 'cantidad'), se asume que todo fue bueno,
@@ -930,6 +1064,7 @@ def produccion_route():
             operario_id=operario.id,
             tarea_id=tarea.id,
             pedido_id=data.get('pedido_id') or None,
+            tipo_balon_id=tipo_balon_id,
             cantidad=total_unidades,
             unidades_buenas=unidades_buenas,
             unidades_defectuosas=unidades_defectuosas,
@@ -1034,10 +1169,28 @@ def migrar_columnas_faltantes():
                 print(f"[MIGRACION] No se pudo agregar {nombre_tabla}.{columna.name}: {e}")
 
 
+def reclasificar_tipos_balon_existentes():
+    """
+    La migración automática agrega la columna 'categoria' con valor NULL a
+    los tipos de balón que ya existían antes de este cambio (ALTER TABLE no
+    aplica el default de Python a filas ya existentes). Esta función les
+    asigna la categoría correcta usando CATEGORIAS_TIPO_BALON.
+    """
+    pendientes = TipoBalon.query.filter(
+        (TipoBalon.categoria.is_(None)) | (TipoBalon.categoria == '')
+    ).all()
+    for tipo in pendientes:
+        tipo.categoria = CATEGORIAS_TIPO_BALON.get(tipo.nombre, 'Otros')
+    if pendientes:
+        db.session.commit()
+        print(f"[MIGRACION] Categoría asignada a {len(pendientes)} tipos de balón existentes")
+
+
 with app.app_context():
     db.create_all()
     migrar_columnas_faltantes()
     inicializar_datos()
+    reclasificar_tipos_balon_existentes()
     cargar_materiales_sgii()
 
 

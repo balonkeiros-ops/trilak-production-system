@@ -572,6 +572,20 @@ export default function App() {
 
   const TiposView = () => {
     const [tipoSeleccionado, setTipoSeleccionado] = useState(null);
+    const [detalle, setDetalle] = useState(null);
+    const [cargandoDetalle, setCargandoDetalle] = useState(false);
+    const [categoriaFiltro, setCategoriaFiltro] = useState('Todas');
+
+    const categorias = ['Todas', ...Array.from(new Set(tiposBalon.map(t => t.categoria || 'Otros')))];
+    const tiposFiltrados = categoriaFiltro === 'Todas'
+      ? tiposBalon
+      : tiposBalon.filter(t => (t.categoria || 'Otros') === categoriaFiltro);
+
+    const COLOR_SEMAFORO = {
+      verde: COLORS.success,
+      amarillo: COLORS.warning,
+      rojo: COLORS.danger
+    };
 
     const pedidosDelTipo = tipoSeleccionado
       ? pedidos
@@ -582,41 +596,159 @@ export default function App() {
           .filter(Boolean)
       : [];
 
+    const seleccionarTipo = async (tipo) => {
+      if (tipoSeleccionado && tipoSeleccionado.id === tipo.id) {
+        setTipoSeleccionado(null);
+        setDetalle(null);
+        return;
+      }
+      setTipoSeleccionado(tipo);
+      setDetalle(null);
+      setCargandoDetalle(true);
+      try {
+        const res = await fetch(`${API_BASE_URL}/tipos-balon/${tipo.id}/metricas`);
+        if (res.ok) setDetalle(await res.json());
+      } catch (error) {
+        console.error('Error cargando métricas:', error);
+      } finally {
+        setCargandoDetalle(false);
+      }
+    };
+
     return (
       <div style={{ padding: '30px' }}>
-        <h1 style={{ fontSize: '28px', color: COLORS.primary, marginBottom: '30px' }}>⚽ Tipos de Balones ({tiposBalon.length})</h1>
-        {tiposBalon.length > 0 ? (
+        <h1 style={{ fontSize: '28px', color: COLORS.primary, marginBottom: '20px' }}>⚽ Tipos de Balones ({tiposFiltrados.length}/{tiposBalon.length})</h1>
+
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '20px' }}>
+          {categorias.map(cat => (
+            <button
+              key={cat}
+              onClick={() => setCategoriaFiltro(cat)}
+              style={{
+                padding: '6px 14px',
+                borderRadius: '20px',
+                border: `1px solid ${COLORS.primary}`,
+                backgroundColor: categoriaFiltro === cat ? COLORS.primary : 'white',
+                color: categoriaFiltro === cat ? 'white' : COLORS.primary,
+                cursor: 'pointer',
+                fontSize: '13px',
+                fontWeight: 'bold'
+              }}
+            >
+              {cat}
+            </button>
+          ))}
+        </div>
+
+        {tiposFiltrados.length > 0 ? (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px' }}>
-            {tiposBalon.map(tipo => {
+            {tiposFiltrados.map(tipo => {
               const seleccionado = tipoSeleccionado && tipoSeleccionado.id === tipo.id;
+              const colorSemaforo = COLOR_SEMAFORO[tipo.metricas?.semaforo] || COLORS.border;
               return (
-                <div
+                <button
                   key={tipo.id}
-                  onClick={() => setTipoSeleccionado(seleccionado ? null : tipo)}
+                  onClick={() => seleccionarTipo(tipo)}
                   style={{
                     backgroundColor: 'white',
                     padding: '20px',
                     borderRadius: '8px',
-                    borderLeft: `5px solid ${COLORS.warning}`,
-                    textAlign: 'center',
+                    borderLeft: `6px solid ${colorSemaforo}`,
+                    border: seleccionado ? `2px solid ${COLORS.secondary}` : `1px solid ${COLORS.border}`,
+                    borderLeftWidth: '6px',
+                    borderLeftColor: colorSemaforo,
+                    textAlign: 'left',
                     cursor: 'pointer',
-                    boxShadow: seleccionado ? `0 0 0 2px ${COLORS.secondary}` : 'none'
+                    font: 'inherit',
+                    display: 'block',
+                    width: '100%'
                   }}
                 >
-                  <p style={{ fontSize: '18px', fontWeight: 'bold', color: COLORS.primary, margin: 0 }}>{tipo.nombre}</p>
-                </div>
+                  <p style={{ fontSize: '18px', fontWeight: 'bold', color: COLORS.primary, margin: '0 0 6px 0' }}>{tipo.nombre}</p>
+                  <p style={{ fontSize: '12px', color: '#999', margin: '0 0 8px 0' }}>{tipo.categoria || 'Otros'}</p>
+                  {tipo.metricas && (
+                    <p style={{ fontSize: '13px', color: '#666', margin: 0 }}>
+                      Disponibles: <strong>{tipo.metricas.disponibles}</strong> · Pendientes: <strong>{tipo.metricas.pendientes}</strong>
+                    </p>
+                  )}
+                </button>
               );
             })}
           </div>
         ) : (
-          <p style={{ fontSize: '16px', color: '#999' }}>No hay tipos de balones</p>
+          <p style={{ fontSize: '16px', color: '#999' }}>No hay tipos de balones en esta categoría</p>
         )}
 
         {tipoSeleccionado && (
           <div style={{ marginTop: '30px', backgroundColor: 'white', padding: '20px', borderRadius: '8px' }}>
             <h2 style={{ fontSize: '20px', color: COLORS.primary, marginBottom: '15px' }}>
-              Pedidos de "{tipoSeleccionado.nombre}" ({pedidosDelTipo.length})
+              {tipoSeleccionado.nombre}
             </h2>
+
+            {cargandoDetalle && <p style={{ color: '#999' }}>Cargando métricas...</p>}
+
+            {detalle && (
+              <>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '12px', marginBottom: '20px' }}>
+                  <div style={{ padding: '12px', borderRadius: '6px', backgroundColor: '#f5f5f5', textAlign: 'center' }}>
+                    <p style={{ margin: '0 0 4px 0', fontSize: '12px', color: '#666' }}>Fabricadas</p>
+                    <p style={{ margin: 0, fontSize: '22px', fontWeight: 'bold', color: COLORS.primary }}>{detalle.metricas.fabricadas}</p>
+                  </div>
+                  <div style={{ padding: '12px', borderRadius: '6px', backgroundColor: '#f5f5f5', textAlign: 'center' }}>
+                    <p style={{ margin: '0 0 4px 0', fontSize: '12px', color: '#666' }}>Defectuosas</p>
+                    <p style={{ margin: 0, fontSize: '22px', fontWeight: 'bold', color: COLORS.danger }}>{detalle.metricas.defectuosas}</p>
+                  </div>
+                  <div style={{ padding: '12px', borderRadius: '6px', backgroundColor: '#f5f5f5', textAlign: 'center' }}>
+                    <p style={{ margin: '0 0 4px 0', fontSize: '12px', color: '#666' }}>Entregadas</p>
+                    <p style={{ margin: 0, fontSize: '22px', fontWeight: 'bold', color: COLORS.primary }}>{detalle.metricas.entregadas}</p>
+                  </div>
+                  <div style={{ padding: '12px', borderRadius: '6px', backgroundColor: '#f5f5f5', textAlign: 'center' }}>
+                    <p style={{ margin: '0 0 4px 0', fontSize: '12px', color: '#666' }}>Pendientes</p>
+                    <p style={{ margin: 0, fontSize: '22px', fontWeight: 'bold', color: COLORS.warning }}>{detalle.metricas.pendientes}</p>
+                  </div>
+                  <div style={{ padding: '12px', borderRadius: '6px', backgroundColor: '#f5f5f5', textAlign: 'center', borderTop: `4px solid ${COLOR_SEMAFORO[detalle.metricas.semaforo]}` }}>
+                    <p style={{ margin: '0 0 4px 0', fontSize: '12px', color: '#666' }}>Disponibles</p>
+                    <p style={{ margin: 0, fontSize: '22px', fontWeight: 'bold', color: COLOR_SEMAFORO[detalle.metricas.semaforo] }}>{detalle.metricas.disponibles}</p>
+                  </div>
+                </div>
+
+                <h3 style={{ fontSize: '15px', color: COLORS.primary, marginBottom: '10px' }}>
+                  📦 Trazabilidad de lotes ({detalle.lotes.length})
+                </h3>
+                {detalle.lotes.length > 0 ? (
+                  <div style={{ maxHeight: '260px', overflowY: 'auto', marginBottom: '20px' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                      <thead>
+                        <tr style={{ textAlign: 'left', borderBottom: `1px solid ${COLORS.border}` }}>
+                          <th style={{ padding: '6px' }}>Fecha</th>
+                          <th style={{ padding: '6px' }}>Operario</th>
+                          <th style={{ padding: '6px' }}>Buenas</th>
+                          <th style={{ padding: '6px' }}>Defectuosas</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {detalle.lotes.map(l => (
+                          <tr key={l.id} style={{ borderBottom: `1px solid ${COLORS.border}` }}>
+                            <td style={{ padding: '6px' }}>{new Date(l.fecha).toLocaleDateString('es-CO')}</td>
+                            <td style={{ padding: '6px' }}>{l.operario_nombre}</td>
+                            <td style={{ padding: '6px', color: COLORS.success }}>{l.unidades_buenas}</td>
+                            <td style={{ padding: '6px', color: (l.unidades_defectuosas || 0) > 0 ? COLORS.danger : '#999' }}>{l.unidades_defectuosas}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p style={{ fontSize: '13px', color: '#999', marginBottom: '20px' }}>
+                    Todavía no hay producción registrada para esta referencia. Al registrar producción, selecciona el tipo de balón para que empiece a contar aquí.
+                  </p>
+                )}
+              </>
+            )}
+
+            <h3 style={{ fontSize: '15px', color: COLORS.primary, marginBottom: '10px' }}>
+              Pedidos de esta referencia ({pedidosDelTipo.length})
+            </h3>
             {pedidosDelTipo.length > 0 ? (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '15px' }}>
                 {pedidosDelTipo.map(p => (
@@ -641,6 +773,7 @@ export default function App() {
       operario_id: '',
       tarea_id: '',
       pedido_id: '',
+      tipo_balon_id: '',
       unidades_buenas: 1,
       unidades_defectuosas: 0,
       fecha: new Date().toISOString().slice(0, 10),
@@ -725,6 +858,7 @@ export default function App() {
             operario_id: '',
             tarea_id: '',
             pedido_id: '',
+            tipo_balon_id: '',
             unidades_buenas: 1,
             unidades_defectuosas: 0,
             fecha: new Date().toISOString().slice(0, 10),
@@ -759,8 +893,7 @@ export default function App() {
         promedioSegundos: Math.round(total / cantidad),
         registros: cantidad
       }));
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+    }, [produccion]);
 
     return (
       <div style={{ padding: '30px' }}>
@@ -807,6 +940,20 @@ export default function App() {
               <option key={p.id} value={p.id}>{p.numero_pedido} - {p.cliente}</option>
             ))}
           </select>
+
+          <select
+            value={form.tipo_balon_id}
+            onChange={(e) => setForm({ ...form, tipo_balon_id: e.target.value })}
+            style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}
+          >
+            <option value="">-- Tipo de balón (opcional, pero recomendado) --</option>
+            {tiposBalon.map(t => (
+              <option key={t.id} value={t.id}>{t.nombre}</option>
+            ))}
+          </select>
+          <p style={{ fontSize: '11px', color: '#999', margin: '-6px 0 10px 0' }}>
+            Selecciónalo para que esta producción cuente en "Tipos Balón" (fabricadas, disponibles, trazabilidad).
+          </p>
 
           <div style={{
             backgroundColor: cronometroActivo ? '#fff3cd' : '#f5f5f5',
