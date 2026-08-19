@@ -727,12 +727,8 @@ def pedidos_route():
             material.cantidad_disponible = max(0.0, material.cantidad_disponible - cantidad)
 
             stock_proyectado = max(0.0, stock_check - cantidad)
-            # Protección: materiales creados antes de que existiera la columna
-            # umbral_minimo pueden tener el valor en NULL (ver corregir_umbrales_nulos()
-            # más abajo, que normaliza esto en la base de datos al arrancar).
-            umbral_minimo_material = material.umbral_minimo if material.umbral_minimo is not None else 50
-            if stock_proyectado < umbral_minimo_material:
-                alertas_stock.append({'material_id': material.id, 'material_nombre': material.nombre, 'cantidad_disponible': stock_proyectado, 'umbral_minimo': umbral_minimo_material, 'unidad': material.unidad})
+            if stock_proyectado < material.umbral_minimo:
+                alertas_stock.append({'material_id': material.id, 'material_nombre': material.nombre, 'cantidad_disponible': stock_proyectado, 'umbral_minimo': material.umbral_minimo, 'unidad': material.unidad})
 
             resultado = registrar_salida_inventario(nombre_material=material.nombre, cantidad=cantidad, referencia=data.get('numero_pedido', 'SIN-REF'))
             if not resultado['ok']:
@@ -971,24 +967,9 @@ def migrar_columnas_faltantes():
                 print(f"[MIGRACION] No se pudo agregar {nombre_tabla}.{columna.name}: {e}")
 
 
-def corregir_umbrales_nulos():
-    """
-    ALTER TABLE ADD COLUMN (ver migrar_columnas_faltantes) deja NULL en las
-    filas ya existentes, aunque el modelo tenga default=50. Esto normaliza
-    esas filas viejas para que umbral_minimo nunca sea None en la BD real.
-    """
-    materiales_sin_umbral = Material.query.filter(Material.umbral_minimo.is_(None)).all()
-    for m in materiales_sin_umbral:
-        m.umbral_minimo = 50
-    if materiales_sin_umbral:
-        db.session.commit()
-        print(f"[MIGRACION] {len(materiales_sin_umbral)} materiales con umbral_minimo corregido a 50")
-
-
 with app.app_context():
     db.create_all()
     migrar_columnas_faltantes()
-    corregir_umbrales_nulos()
     inicializar_datos()
     cargar_materiales_sgii()
 
