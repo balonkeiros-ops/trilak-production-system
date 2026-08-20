@@ -10,3 +10,4 @@ psycopg2-binary
 urllib3
 xlsxwriter
 reportlab
+psycopg2-binary

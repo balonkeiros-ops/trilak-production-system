@@ -1,0 +1,10 @@
+from app_PRODUCCION import app, db
+
+with app.app_context():
+    try:
+        result = db.session.execute('SELECT 1').scalar()
+        print("✅ Conexión exitosa a Supabase!")
+        print(f"Resultado: {result}")
+    except Exception as e:
+        print("❌ Error de conexión:", e)
+        print("Tipo de error:", type(e).__name__)

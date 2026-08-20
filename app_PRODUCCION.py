@@ -10,8 +10,15 @@ import io
 import xlsxwriter
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
+from dotenv import load_dotenv
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# Carga las variables del archivo .env (DATABASE_URL, SECRET_KEY, etc.) cuando
+# se corre localmente. En Render esto no rompe nada: no hay archivo .env ahí,
+# load_dotenv() simplemente no encuentra nada y sigue de largo sin error —
+# Render inyecta las variables de entorno directamente desde su panel.
+load_dotenv()
 
 app = Flask(__name__, static_folder='build/static', static_url_path='/static')
 app.secret_key = os.environ.get('SECRET_KEY', 'trilak-dev-secret-cambiar-en-render')
