@@ -32,6 +32,17 @@ app.config['SQLALCHEMY_DATABASE_URI'] = _database_url
 print(f"[DB] Usando: {_database_url.split('://')[0]}://... (longitud={len(_database_url)})")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JSON_SORT_KEYS'] = False
+# Supabase (y los servicios de Postgres administrado en general) cierran
+# conexiones inactivas periódicamente. Sin esto, SQLAlchemy a veces intenta
+# reutilizar una conexión ya cerrada y falla con
+# "server closed the connection unexpectedly". pool_pre_ping hace un chequeo
+# rápido antes de reutilizar una conexión (y la reemplaza si está muerta);
+# pool_recycle fuerza renovar conexiones cada 5 minutos, antes de que
+# Supabase las cierre por su cuenta.
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'pool_pre_ping': True,
+    'pool_recycle': 300,
+}
 
 db = SQLAlchemy(app)
 CORS(app)
