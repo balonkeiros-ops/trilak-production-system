@@ -1,7 +1,7 @@
 from flask import Flask, jsonify, request, send_from_directory, session, send_file
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 import sqlite3
 import os
 import base64
@@ -19,6 +19,19 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # load_dotenv() simplemente no encuentra nada y sigue de largo sin error —
 # Render inyecta las variables de entorno directamente desde su panel.
 load_dotenv()
+
+# Render corre sus servidores en UTC, no en la hora de Colombia. Sin esto,
+# datetime.now() usa la hora del servidor -> los números de pedido y fechas
+# de producción quedan "adelantados" varias horas respecto a lo que el
+# operario ve en su reloj, y hasta pueden saltar al día siguiente de noche
+# (ej. a las 7pm en Colombia ya es medianoche en UTC).
+COLOMBIA_TZ = timezone(timedelta(hours=-5))
+
+
+def ahora_colombia():
+    """Fecha y hora actual en horario de Colombia (UTC-5), sin importar
+    en qué zona horaria esté corriendo el servidor (Render usa UTC)."""
+    return datetime.now(COLOMBIA_TZ).replace(tzinfo=None)
 
 app = Flask(__name__, static_folder='build/static', static_url_path='/static')
 app.secret_key = os.environ.get('SECRET_KEY', 'trilak-dev-secret-cambiar-en-render')
@@ -113,7 +126,7 @@ class Pedido(db.Model):
     cliente = db.Column(db.String(150), nullable=False)
     tipo_balon_id = db.Column(db.Integer, db.ForeignKey('tipo_balon.id'), nullable=True)
     cantidad_balones = db.Column(db.Float, default=0)
-    fecha_creacion = db.Column(db.DateTime, default=datetime.now)
+    fecha_creacion = db.Column(db.DateTime, default=ahora_colombia)
     fecha_entrega_solicitada = db.Column(db.DateTime)
     estado = db.Column(db.String(20), default='pendiente')
     observaciones = db.Column(db.Text)
@@ -148,7 +161,7 @@ class PedidoImagen(db.Model):
     nombre_archivo = db.Column(db.String(255))
     tipo_mime = db.Column(db.String(50))
     contenido_base64 = db.Column(db.Text, nullable=False)
-    fecha_subida = db.Column(db.DateTime, default=datetime.now)
+    fecha_subida = db.Column(db.DateTime, default=ahora_colombia)
 
     def to_dict(self):
         return {
@@ -213,7 +226,7 @@ class Produccion(db.Model):
     hora_inicio = db.Column(db.DateTime, nullable=True)
     hora_fin = db.Column(db.DateTime, nullable=True)
     duracion_segundos = db.Column(db.Integer, nullable=True)
-    fecha = db.Column(db.DateTime, default=datetime.now)
+    fecha = db.Column(db.DateTime, default=ahora_colombia)
     observaciones = db.Column(db.Text)
 
     operario = db.relationship('Operario', backref='producciones')
@@ -245,7 +258,7 @@ class Produccion(db.Model):
 
 
 def generar_numero_pedido():
-    prefijo = datetime.now().strftime('%d%m%y')
+    prefijo = ahora_colombia().strftime('%d%m%y')
     ultimo = Pedido.query.filter(Pedido.numero_pedido.like(f'{prefijo}%')).order_by(Pedido.numero_pedido.desc()).first()
     correlativo = 1000
     if ultimo and ultimo.numero_pedido and len(ultimo.numero_pedido) > len(prefijo):
@@ -294,7 +307,7 @@ def registrar_salida_inventario(nombre_material: str, cantidad: float, referenci
             conn.close()
             return {'ok': False, 'mensaje': f'"{nombre_material}" no encontrado en inventario'}
         material_id = row[0]
-        ahora = datetime.now().isoformat()
+        ahora = ahora_colombia().isoformat()
         cursor.execute("""
             INSERT INTO movimientos
                 (material_id, tipo, cantidad, fecha, referencia, descripcion, usuario, created_at)
@@ -543,13 +556,13 @@ def actualizar_operario(operario_id):
 def analitica_operario(operario_id):
     operario = Operario.query.get_or_404(operario_id)
     filtro = request.args.get('periodo', 'mensual')
-    fecha_filtro = datetime.now()
+    fecha_filtro = ahora_colombia()
     if filtro == 'diario':
-        fecha_filtro = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        fecha_filtro = ahora_colombia().replace(hour=0, minute=0, second=0, microsecond=0)
     elif filtro == 'semanal':
-        fecha_filtro = datetime.now() - timedelta(days=7)
+        fecha_filtro = ahora_colombia() - timedelta(days=7)
     elif filtro == 'mensual':
-        fecha_filtro = datetime.now() - timedelta(days=30)
+        fecha_filtro = ahora_colombia() - timedelta(days=30)
 
     registros = Produccion.query.filter(
         Produccion.operario_id == operario_id,
@@ -838,7 +851,7 @@ def produccion_route():
             hora_inicio=hora_inicio,
             hora_fin=hora_fin,
             duracion_segundos=duracion_segundos,
-            fecha=datetime.fromisoformat(data['fecha']) if data.get('fecha') else datetime.now(),
+            fecha=datetime.fromisoformat(data['fecha']) if data.get('fecha') else ahora_colombia(),
             observaciones=data.get('observaciones', '')
         )
         db.session.add(nueva)
