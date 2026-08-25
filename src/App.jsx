@@ -716,28 +716,59 @@ export default function App() {
   // ── PRODUCCIÓN ──────────────────────────────────────────────────────────────
 
   const ProduccionView = () => {
-    const [form, setForm] = useState({
-      operario_id: '',
+    // ── Sesiones por operario ──────────────────────────────────────────────
+    // Antes: un solo 'form' + un solo cronómetro compartidos por toda la
+    // pantalla, así que mientras un operario tenía el cronómetro corriendo,
+    // el formulario quedaba bloqueado (disabled) para todos los demás.
+    //
+    // Ahora: cada operario que se "agrega" a la estación tiene su propia
+    // tarjeta independiente, con su propio formulario y su propio
+    // cronómetro. Varios operarios (ej. 3-4 compartiendo una tablet) pueden
+    // tener su tarea abierta y su cronómetro corriendo al mismo tiempo, sin
+    // pisarse entre sí.
+    //
+    // Se guarda en localStorage para que, si la tablet se recarga por
+    // accidente a mitad de turno, nadie pierda su cronómetro en curso.
+    const STORAGE_KEY = 'trilak_sesiones_produccion';
+
+    const sesionVacia = () => ({
       tarea_id: '',
       pedido_id: '',
       tipo_balon_id: '',
-      complejidad_estilo: '32 cascos', // NUEVO para HU-12
+      complejidad_estilo: '32 cascos',
       unidades_buenas: 1,
       unidades_defectuosas: 0,
       fecha: new Date().toISOString().slice(0, 10),
-      observaciones: ''
+      observaciones: '',
+      horaInicioCrono: null, // ISO string o null
+      horaFinCrono: null,    // ISO string o null
+      cronometroActivo: false
     });
 
-    const [cronometroActivo, setCronometroActivo] = useState(false);
-    const [segundosTranscurridos, setSegundosTranscurridos] = useState(0);
-    const [horaInicioCrono, setHoraInicioCrono] = useState(null);
-    const [horaFinCrono, setHoraFinCrono] = useState(null);
+    const [sesiones, setSesiones] = useState(() => {
+      try {
+        const guardado = localStorage.getItem(STORAGE_KEY);
+        return guardado ? JSON.parse(guardado) : {};
+      } catch {
+        return {};
+      }
+    });
+    const [operarioParaAgregar, setOperarioParaAgregar] = useState('');
+    const [tick, setTick] = useState(0); // fuerza re-render cada segundo para los cronómetros activos
 
+    // Persiste las sesiones en localStorage cada vez que cambian
     useEffect(() => {
-      if (!cronometroActivo || !horaInicioCrono) return;
-      const intervalo = setInterval(() => { setSegundosTranscurridos(Math.floor((new Date() - horaInicioCrono) / 1000)); }, 1000);
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(sesiones)); } catch {}
+    }, [sesiones]);
+
+    // Un solo intervalo global que "tickea" cada segundo mientras haya
+    // al menos un cronómetro activo, en vez de un setInterval por operario
+    useEffect(() => {
+      const hayActivos = Object.values(sesiones).some(s => s.cronometroActivo);
+      if (!hayActivos) return;
+      const intervalo = setInterval(() => setTick(t => t + 1), 1000);
       return () => clearInterval(intervalo);
-    }, [cronometroActivo, horaInicioCrono]);
+    }, [sesiones]);
 
     const formatearTiempo = (totalSegundos) => {
       const h = Math.floor(totalSegundos / 3600);
@@ -746,24 +777,70 @@ export default function App() {
       return h > 0 ? `${h}h ${String(m).padStart(2, '0')}m ${String(s).padStart(2, '0')}s` : `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
     };
 
-    const iniciarCronometro = () => {
-      if (!form.operario_id || !form.tarea_id) return alert('Selecciona operario y tarea antes de iniciar el cronómetro');
-      const ahora = new Date(); setHoraInicioCrono(ahora); setHoraFinCrono(null); setSegundosTranscurridos(0); setCronometroActivo(true);
+    const segundosDeSesion = (s) => {
+      if (s.cronometroActivo && s.horaInicioCrono) {
+        return Math.floor((Date.now() - new Date(s.horaInicioCrono).getTime()) / 1000);
+      }
+      if (s.horaInicioCrono && s.horaFinCrono) {
+        return Math.floor((new Date(s.horaFinCrono).getTime() - new Date(s.horaInicioCrono).getTime()) / 1000);
+      }
+      return 0;
     };
 
-    const detenerCronometro = () => { setHoraFinCrono(new Date()); setCronometroActivo(false); };
+    const agregarOperario = (operarioId) => {
+      if (!operarioId) return;
+      setSesiones(prev => prev[operarioId] ? prev : { ...prev, [operarioId]: sesionVacia() });
+      setOperarioParaAgregar('');
+    };
 
-    const totalUnidades = (parseFloat(form.unidades_buenas) || 0) + (parseFloat(form.unidades_defectuosas) || 0);
+    const actualizarSesion = (operarioId, cambios) => {
+      setSesiones(prev => ({ ...prev, [operarioId]: { ...prev[operarioId], ...cambios } }));
+    };
 
-    const registrarProduccion = async () => {
-      if (!form.operario_id || !form.tarea_id) return alert('Seleccione operario y tarea');
-      if (!form.tipo_balon_id) return alert('Selecciona el tipo de balón (obligatorio)');
+    const cerrarSesion = (operarioId) => {
+      if (!window.confirm('¿Cerrar esta tarjeta sin registrar? Se perderá el tiempo del cronómetro.')) return;
+      setSesiones(prev => {
+        const copia = { ...prev };
+        delete copia[operarioId];
+        return copia;
+      });
+    };
+
+    const iniciarCronometro = (operarioId) => {
+      const s = sesiones[operarioId];
+      if (!s.tarea_id) return alert('Selecciona la tarea antes de iniciar el cronómetro');
+      actualizarSesion(operarioId, {
+        horaInicioCrono: new Date().toISOString(),
+        horaFinCrono: null,
+        cronometroActivo: true
+      });
+    };
+
+    const detenerCronometro = (operarioId) => {
+      actualizarSesion(operarioId, { horaFinCrono: new Date().toISOString(), cronometroActivo: false });
+    };
+
+    const registrarProduccion = async (operarioId) => {
+      const s = sesiones[operarioId];
+      const totalUnidades = (parseFloat(s.unidades_buenas) || 0) + (parseFloat(s.unidades_defectuosas) || 0);
+      if (!s.tarea_id) return alert('Selecciona la tarea');
+      if (!s.tipo_balon_id) return alert('Selecciona el tipo de balón (obligatorio)');
       if (totalUnidades <= 0) return alert('Registra al menos una unidad');
 
-      const payload = { ...form };
-      if (horaInicioCrono && horaFinCrono) {
-        payload.hora_inicio = horaInicioCrono.toISOString();
-        payload.hora_fin = horaFinCrono.toISOString();
+      const payload = {
+        operario_id: operarioId,
+        tarea_id: s.tarea_id,
+        pedido_id: s.pedido_id,
+        tipo_balon_id: s.tipo_balon_id,
+        complejidad_estilo: s.complejidad_estilo,
+        unidades_buenas: s.unidades_buenas,
+        unidades_defectuosas: s.unidades_defectuosas,
+        fecha: s.fecha,
+        observaciones: s.observaciones
+      };
+      if (s.horaInicioCrono && s.horaFinCrono) {
+        payload.hora_inicio = s.horaInicioCrono;
+        payload.hora_fin = s.horaFinCrono;
       }
 
       try {
@@ -775,11 +852,12 @@ export default function App() {
         if (res.ok) {
           alert('✅ Producción registrada');
           await cargarDatos();
-          setForm({
-            operario_id: '', tarea_id: '', pedido_id: '', tipo_balon_id: '', complejidad_estilo: '32 cascos',
-            unidades_buenas: 1, unidades_defectuosas: 0, fecha: new Date().toISOString().slice(0, 10), observaciones: ''
+          // Libera al operario: su tarjeta desaparece y puede empezar una tarea nueva
+          setSesiones(prev => {
+            const copia = { ...prev };
+            delete copia[operarioId];
+            return copia;
           });
-          setHoraInicioCrono(null); setHoraFinCrono(null); setSegundosTranscurridos(0);
         } else {
           const data = await res.json();
           alert('❌ ' + (data.error || 'Error al registrar'));
@@ -798,61 +876,95 @@ export default function App() {
       return Object.entries(acumulado).map(([nombre, { total, cantidad }]) => ({ nombre, promedioSegundos: Math.round(total / cantidad), registros: cantidad }));
     }, []);
 
+    const operariosDisponibles = operarios.filter(op => !sesiones[op.id]);
+    const idsSesionesActivas = Object.keys(sesiones);
+
     return (
       <div style={{ padding: '30px' }}>
         <h1 style={{ fontSize: '28px', color: COLORS.primary, marginBottom: '30px' }}>📝 Registro de Producción</h1>
-        <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '8px', marginBottom: '30px' }}>
-          <h2 style={{ fontSize: '18px', color: COLORS.primary, marginBottom: '20px' }}>Nueva Tarea Realizada</h2>
 
-          <select value={form.operario_id} onChange={(e) => setForm({ ...form, operario_id: e.target.value })} disabled={cronometroActivo} style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box', opacity: cronometroActivo ? 0.6 : 1 }}>
-            <option value="">-- Seleccionar Operario --</option>
-            {operarios.map(op => (<option key={op.id} value={op.id}>{op.nombre}</option>))}
+        {/* Selector para agregar un operario nuevo a la estación (no bloquea a los demás) */}
+        <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '8px', marginBottom: '20px' }}>
+          <h2 style={{ fontSize: '16px', color: COLORS.primary, marginBottom: '10px' }}>➕ Agregar operario a esta estación</h2>
+          <select
+            value={operarioParaAgregar}
+            onChange={(e) => { setOperarioParaAgregar(e.target.value); agregarOperario(e.target.value); }}
+            style={{ width: '100%', padding: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}
+          >
+            <option value="">-- Seleccionar operario --</option>
+            {operariosDisponibles.map(op => (<option key={op.id} value={op.id}>{op.nombre}</option>))}
           </select>
-
-          <select value={form.tarea_id} onChange={(e) => setForm({ ...form, tarea_id: e.target.value })} disabled={cronometroActivo} style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box', opacity: cronometroActivo ? 0.6 : 1 }}>
-            <option value="">-- Seleccionar Tarea --</option>
-            {tareas.map(t => (<option key={t.id} value={t.id}>{t.nombre}</option>))}
-          </select>
-
-          <select value={form.pedido_id} onChange={(e) => setForm({ ...form, pedido_id: e.target.value })} style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}>
-            <option value="">-- Pedido (opcional) --</option>
-            {pedidos.map(p => (<option key={p.id} value={p.id}>{p.numero_pedido} - {p.cliente}</option>))}
-          </select>
-
-          <select value={form.tipo_balon_id} onChange={(e) => setForm({ ...form, tipo_balon_id: e.target.value })} style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}>
-            <option value="">-- Tipo de balón (Obligatorio) --</option>
-            {tiposBalon.map(t => (<option key={t.id} value={t.id}>{t.nombre}</option>))}
-          </select>
-
-          {/* NUEVO CAMPO: Complejidad HU-12 */}
-          <label style={{ display: 'block', fontSize: '13px', color: '#666', marginBottom: '4px', fontWeight: 'bold' }}>Estilo de Termosellado</label>
-          <select value={form.complejidad_estilo} onChange={(e) => setForm({ ...form, complejidad_estilo: e.target.value })} style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}>
-            <option value="32 cascos">32 Cascos (Complejidad Alta)</option>
-            <option value="4 piezas">4 Piezas (Complejidad Estándar)</option>
-          </select>
-
-          <div style={{ backgroundColor: cronometroActivo ? '#fff3cd' : '#f5f5f5', border: `1px solid ${cronometroActivo ? COLORS.warning : COLORS.border}`, borderRadius: '4px', padding: '12px', marginBottom: '15px', textAlign: 'center' }}>
-            <p style={{ margin: '0 0 8px 0', fontSize: '13px', color: '#666', fontWeight: 'bold' }}>⏱️ Cronómetro de tarea</p>
-            <p style={{ margin: '0 0 10px 0', fontSize: '26px', fontFamily: 'monospace', color: COLORS.primary }}>{formatearTiempo(segundosTranscurridos)}</p>
-            {!cronometroActivo ? (
-              <button onClick={iniciarCronometro} style={{ padding: '8px 16px', border: 'none', borderRadius: '4px', backgroundColor: COLORS.success, color: 'white', cursor: 'pointer', fontWeight: 'bold' }}>▶️ Iniciar cronómetro</button>
-            ) : (
-              <button onClick={detenerCronometro} style={{ padding: '8px 16px', border: 'none', borderRadius: '4px', backgroundColor: COLORS.danger, color: 'white', cursor: 'pointer', fontWeight: 'bold' }}>⏹️ Detener</button>
-            )}
-            {horaInicioCrono && horaFinCrono && <p style={{ margin: '10px 0 0 0', fontSize: '12px', color: '#666' }}>Tiempo capturado: {formatearTiempo(segundosTranscurridos)} — se guardará junto con este registro.</p>}
-          </div>
-
-          <label style={{ display: 'block', fontSize: '13px', color: '#666', marginBottom: '4px', fontWeight: 'bold' }}>Unidades buenas</label>
-          <input type="number" min="0" step="0.5" value={form.unidades_buenas} onChange={(e) => setForm({ ...form, unidades_buenas: e.target.value })} style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }} />
-
-          <label style={{ display: 'block', fontSize: '13px', color: '#666', marginBottom: '4px', fontWeight: 'bold' }}>Unidades defectuosas</label>
-          <input type="number" min="0" step="0.5" value={form.unidades_defectuosas} onChange={(e) => setForm({ ...form, unidades_defectuosas: e.target.value })} style={{ width: '100%', padding: '10px', marginBottom: '4px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }} />
-          <p style={{ fontSize: '13px', color: '#999', margin: '0 0 10px 0' }}>Total de unidades: <strong>{totalUnidades}</strong></p>
-
-          <input type="date" value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }} />
-          <textarea value={form.observaciones} onChange={(e) => setForm({ ...form, observaciones: e.target.value })} placeholder="Observaciones (opcional)" style={{ width: '100%', padding: '10px', marginBottom: '15px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box', minHeight: '60px' }} />
-          <button onClick={registrarProduccion} style={{ width: '100%', padding: '12px', backgroundColor: COLORS.success, color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>✅ Registrar Producción</button>
+          {idsSesionesActivas.length === 0 && (
+            <p style={{ fontSize: '13px', color: '#999', marginTop: '10px', marginBottom: 0 }}>
+              Selecciona un operario para abrirle su tarjeta de tarea. Puedes agregar varios a la vez —
+              cada uno tiene su propio cronómetro independiente.
+            </p>
+          )}
         </div>
+
+        {/* Una tarjeta independiente por cada operario con sesión activa */}
+        {idsSesionesActivas.length > 0 && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '20px', marginBottom: '30px' }}>
+            {idsSesionesActivas.map(operarioId => {
+              const s = sesiones[operarioId];
+              const operario = operarios.find(op => String(op.id) === String(operarioId));
+              const segundos = segundosDeSesion(s);
+              const totalUnidades = (parseFloat(s.unidades_buenas) || 0) + (parseFloat(s.unidades_defectuosas) || 0);
+
+              return (
+                <div key={operarioId} style={{ backgroundColor: 'white', padding: '20px', borderRadius: '8px', border: `2px solid ${s.cronometroActivo ? COLORS.warning : COLORS.border}` }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+                    <h2 style={{ fontSize: '17px', color: COLORS.primary, margin: 0 }}>👤 {operario ? operario.nombre : 'Operario'}</h2>
+                    <button onClick={() => cerrarSesion(operarioId)} title="Cerrar sin registrar" style={{ border: 'none', background: 'transparent', color: COLORS.danger, cursor: 'pointer', fontSize: '18px', lineHeight: 1 }}>✖</button>
+                  </div>
+
+                  <select value={s.tarea_id} onChange={(e) => actualizarSesion(operarioId, { tarea_id: e.target.value })} disabled={s.cronometroActivo} style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box', opacity: s.cronometroActivo ? 0.6 : 1 }}>
+                    <option value="">-- Seleccionar Tarea --</option>
+                    {tareas.map(t => (<option key={t.id} value={t.id}>{t.nombre}</option>))}
+                  </select>
+
+                  <select value={s.pedido_id} onChange={(e) => actualizarSesion(operarioId, { pedido_id: e.target.value })} style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}>
+                    <option value="">-- Pedido (opcional) --</option>
+                    {pedidos.map(p => (<option key={p.id} value={p.id}>{p.numero_pedido} - {p.cliente}</option>))}
+                  </select>
+
+                  <select value={s.tipo_balon_id} onChange={(e) => actualizarSesion(operarioId, { tipo_balon_id: e.target.value })} style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}>
+                    <option value="">-- Tipo de balón (Obligatorio) --</option>
+                    {tiposBalon.map(t => (<option key={t.id} value={t.id}>{t.nombre}</option>))}
+                  </select>
+
+                  <label style={{ display: 'block', fontSize: '13px', color: '#666', marginBottom: '4px', fontWeight: 'bold' }}>Estilo de Termosellado</label>
+                  <select value={s.complejidad_estilo} onChange={(e) => actualizarSesion(operarioId, { complejidad_estilo: e.target.value })} style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }}>
+                    <option value="32 cascos">32 Cascos (Complejidad Alta)</option>
+                    <option value="4 piezas">4 Piezas (Complejidad Estándar)</option>
+                  </select>
+
+                  <div style={{ backgroundColor: s.cronometroActivo ? '#fff3cd' : '#f5f5f5', border: `1px solid ${s.cronometroActivo ? COLORS.warning : COLORS.border}`, borderRadius: '4px', padding: '12px', marginBottom: '15px', textAlign: 'center' }}>
+                    <p style={{ margin: '0 0 8px 0', fontSize: '13px', color: '#666', fontWeight: 'bold' }}>⏱️ Cronómetro de tarea</p>
+                    <p style={{ margin: '0 0 10px 0', fontSize: '26px', fontFamily: 'monospace', color: COLORS.primary }}>{formatearTiempo(segundos)}</p>
+                    {!s.cronometroActivo ? (
+                      <button onClick={() => iniciarCronometro(operarioId)} style={{ padding: '8px 16px', border: 'none', borderRadius: '4px', backgroundColor: COLORS.success, color: 'white', cursor: 'pointer', fontWeight: 'bold' }}>▶️ Iniciar cronómetro</button>
+                    ) : (
+                      <button onClick={() => detenerCronometro(operarioId)} style={{ padding: '8px 16px', border: 'none', borderRadius: '4px', backgroundColor: COLORS.danger, color: 'white', cursor: 'pointer', fontWeight: 'bold' }}>⏹️ Detener</button>
+                    )}
+                    {s.horaInicioCrono && s.horaFinCrono && <p style={{ margin: '10px 0 0 0', fontSize: '12px', color: '#666' }}>Tiempo capturado: {formatearTiempo(segundos)} — se guardará junto con este registro.</p>}
+                  </div>
+
+                  <label style={{ display: 'block', fontSize: '13px', color: '#666', marginBottom: '4px', fontWeight: 'bold' }}>Unidades buenas</label>
+                  <input type="number" min="0" step="0.5" value={s.unidades_buenas} onChange={(e) => actualizarSesion(operarioId, { unidades_buenas: e.target.value })} style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }} />
+
+                  <label style={{ display: 'block', fontSize: '13px', color: '#666', marginBottom: '4px', fontWeight: 'bold' }}>Unidades defectuosas</label>
+                  <input type="number" min="0" step="0.5" value={s.unidades_defectuosas} onChange={(e) => actualizarSesion(operarioId, { unidades_defectuosas: e.target.value })} style={{ width: '100%', padding: '10px', marginBottom: '4px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }} />
+                  <p style={{ fontSize: '13px', color: '#999', margin: '0 0 10px 0' }}>Total de unidades: <strong>{totalUnidades}</strong></p>
+
+                  <input type="date" value={s.fecha} onChange={(e) => actualizarSesion(operarioId, { fecha: e.target.value })} style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box' }} />
+                  <textarea value={s.observaciones} onChange={(e) => actualizarSesion(operarioId, { observaciones: e.target.value })} placeholder="Observaciones (opcional)" style={{ width: '100%', padding: '10px', marginBottom: '15px', borderRadius: '4px', border: `1px solid ${COLORS.border}`, boxSizing: 'border-box', minHeight: '60px' }} />
+                  <button onClick={() => registrarProduccion(operarioId)} style={{ width: '100%', padding: '12px', backgroundColor: COLORS.success, color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>✅ Registrar Producción</button>
+                </div>
+              );
+            })}
+          </div>
+        )}
 
         {tiempoPromedioPorOperario.length > 0 && (
           <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '8px', marginBottom: '30px' }}>
