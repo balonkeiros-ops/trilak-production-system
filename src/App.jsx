@@ -754,7 +754,8 @@ export default function App() {
       }
     });
     const [operarioParaAgregar, setOperarioParaAgregar] = useState('');
-    const [tick, setTick] = useState(0); // fuerza re-render cada segundo para los cronómetros activos
+    // eslint-disable-next-line no-unused-vars -- 'tick' fuerza re-renders cada segundo (ver setTick abajo); su valor nunca se lee directamente
+    const [tick, setTick] = useState(0);
 
     // Persiste las sesiones en localStorage cada vez que cambian
     useEffect(() => {
