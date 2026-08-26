@@ -7,7 +7,7 @@ const API_BASE_URL = window.location.hostname === 'localhost' || window.location
   : '/api';
 
 const COLORS = {
-  primary: '#0a4a6e',
+  primary: '#17577c',
   secondary: '#FF6B35',
   success: '#29cac2',
   warning: '#FFC107',
