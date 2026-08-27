@@ -683,30 +683,46 @@ export default function App() {
             })}
           </div>
         ) : (<p style={{ fontSize: '16px', color: '#999' }}>No hay tipos de balones en esta categoría</p>)}
+
+        {/* Antes este panel aparecía al final de la página, después de las 24
+            tarjetas, así que en la práctica quedaba "escondido" y parecía que
+            el clic no hacía nada. Ahora es un modal que aparece al instante
+            encima de todo, sin importar el scroll. */}
         {tipoSeleccionado && (
-          <div style={{ marginTop: '30px', backgroundColor: 'white', padding: '20px', borderRadius: '8px' }}>
-            <h2 style={{ fontSize: '20px', color: COLORS.primary, marginBottom: '15px' }}>{tipoSeleccionado.nombre}</h2>
-            {cargandoDetalle && <p style={{ color: '#999' }}>Cargando métricas...</p>}
-            {detalle && (
-              <>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '12px', marginBottom: '20px' }}>
-                  <div style={{ padding: '12px', borderRadius: '6px', backgroundColor: '#f5f5f5', textAlign: 'center' }}><p style={{ margin: '0 0 4px 0', fontSize: '12px', color: '#666' }}>Fabricadas</p><p style={{ margin: 0, fontSize: '22px', fontWeight: 'bold', color: COLORS.primary }}>{detalle.metricas.fabricadas}</p></div>
-                  <div style={{ padding: '12px', borderRadius: '6px', backgroundColor: '#f5f5f5', textAlign: 'center' }}><p style={{ margin: '0 0 4px 0', fontSize: '12px', color: '#666' }}>Defectuosas</p><p style={{ margin: 0, fontSize: '22px', fontWeight: 'bold', color: COLORS.danger }}>{detalle.metricas.defectuosas}</p></div>
-                  <div style={{ padding: '12px', borderRadius: '6px', backgroundColor: '#f5f5f5', textAlign: 'center' }}><p style={{ margin: '0 0 4px 0', fontSize: '12px', color: '#666' }}>Entregadas</p><p style={{ margin: 0, fontSize: '22px', fontWeight: 'bold', color: COLORS.primary }}>{detalle.metricas.entregadas}</p></div>
-                  <div style={{ padding: '12px', borderRadius: '6px', backgroundColor: '#f5f5f5', textAlign: 'center' }}><p style={{ margin: '0 0 4px 0', fontSize: '12px', color: '#666' }}>Pendientes</p><p style={{ margin: 0, fontSize: '22px', fontWeight: 'bold', color: COLORS.warning }}>{detalle.metricas.pendientes}</p></div>
-                  <div style={{ padding: '12px', borderRadius: '6px', backgroundColor: '#f5f5f5', textAlign: 'center', borderTop: `4px solid ${COLOR_SEMAFORO[detalle.metricas.semaforo]}` }}><p style={{ margin: '0 0 4px 0', fontSize: '12px', color: '#666' }}>Disponibles</p><p style={{ margin: 0, fontSize: '22px', fontWeight: 'bold', color: COLOR_SEMAFORO[detalle.metricas.semaforo] }}>{detalle.metricas.disponibles}</p></div>
-                </div>
-                <h3 style={{ fontSize: '15px', color: COLORS.primary, marginBottom: '10px' }}>📦 Trazabilidad de lotes ({detalle.lotes.length})</h3>
-                {detalle.lotes.length > 0 ? (
-                  <div style={{ maxHeight: '260px', overflowY: 'auto', marginBottom: '20px' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
-                      <thead><tr style={{ textAlign: 'left', borderBottom: `1px solid ${COLORS.border}` }}><th style={{ padding: '6px' }}>Fecha</th><th style={{ padding: '6px' }}>Operario</th><th style={{ padding: '6px' }}>Buenas</th><th style={{ padding: '6px' }}>Defectuosas</th></tr></thead>
-                      <tbody>{detalle.lotes.map(l => (<tr key={l.id} style={{ borderBottom: `1px solid ${COLORS.border}` }}><td style={{ padding: '6px' }}>{new Date(l.fecha).toLocaleDateString('es-CO')}</td><td style={{ padding: '6px' }}>{l.operario_nombre}</td><td style={{ padding: '6px', color: COLORS.success }}>{l.unidades_buenas}</td><td style={{ padding: '6px', color: (l.unidades_defectuosas || 0) > 0 ? COLORS.danger : '#999' }}>{l.unidades_defectuosas}</td></tr>))}</tbody>
-                    </table>
+          <div
+            onClick={() => { setTipoSeleccionado(null); setDetalle(null); }}
+            style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 20px', overflowY: 'auto', zIndex: 1000 }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{ backgroundColor: 'white', padding: '25px', borderRadius: '8px', maxWidth: '700px', width: '100%', boxShadow: '0 10px 40px rgba(0,0,0,0.3)' }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+                <h2 style={{ fontSize: '20px', color: COLORS.primary, margin: 0 }}>{tipoSeleccionado.nombre}</h2>
+                <button onClick={() => { setTipoSeleccionado(null); setDetalle(null); }} style={{ border: 'none', background: 'transparent', fontSize: '22px', lineHeight: 1, cursor: 'pointer', color: '#999' }}>✖</button>
+              </div>
+              {cargandoDetalle && <p style={{ color: '#999' }}>Cargando métricas...</p>}
+              {detalle && (
+                <>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '12px', marginBottom: '20px' }}>
+                    <div style={{ padding: '12px', borderRadius: '6px', backgroundColor: '#f5f5f5', textAlign: 'center' }}><p style={{ margin: '0 0 4px 0', fontSize: '12px', color: '#666' }}>Fabricadas</p><p style={{ margin: 0, fontSize: '22px', fontWeight: 'bold', color: COLORS.primary }}>{detalle.metricas.fabricadas}</p></div>
+                    <div style={{ padding: '12px', borderRadius: '6px', backgroundColor: '#f5f5f5', textAlign: 'center' }}><p style={{ margin: '0 0 4px 0', fontSize: '12px', color: '#666' }}>Defectuosas</p><p style={{ margin: 0, fontSize: '22px', fontWeight: 'bold', color: COLORS.danger }}>{detalle.metricas.defectuosas}</p></div>
+                    <div style={{ padding: '12px', borderRadius: '6px', backgroundColor: '#f5f5f5', textAlign: 'center' }}><p style={{ margin: '0 0 4px 0', fontSize: '12px', color: '#666' }}>Entregadas</p><p style={{ margin: 0, fontSize: '22px', fontWeight: 'bold', color: COLORS.primary }}>{detalle.metricas.entregadas}</p></div>
+                    <div style={{ padding: '12px', borderRadius: '6px', backgroundColor: '#f5f5f5', textAlign: 'center' }}><p style={{ margin: '0 0 4px 0', fontSize: '12px', color: '#666' }}>Pendientes</p><p style={{ margin: 0, fontSize: '22px', fontWeight: 'bold', color: COLORS.warning }}>{detalle.metricas.pendientes}</p></div>
+                    <div style={{ padding: '12px', borderRadius: '6px', backgroundColor: '#f5f5f5', textAlign: 'center', borderTop: `4px solid ${COLOR_SEMAFORO[detalle.metricas.semaforo]}` }}><p style={{ margin: '0 0 4px 0', fontSize: '12px', color: '#666' }}>Disponibles</p><p style={{ margin: 0, fontSize: '22px', fontWeight: 'bold', color: COLOR_SEMAFORO[detalle.metricas.semaforo] }}>{detalle.metricas.disponibles}</p></div>
                   </div>
-                ) : (<p style={{ fontSize: '13px', color: '#999', marginBottom: '20px' }}>Todavía no hay producción registrada para esta referencia.</p>)}
-              </>
-            )}
+                  <h3 style={{ fontSize: '15px', color: COLORS.primary, marginBottom: '10px' }}>📦 Trazabilidad de lotes ({detalle.lotes.length})</h3>
+                  {detalle.lotes.length > 0 ? (
+                    <div style={{ maxHeight: '260px', overflowY: 'auto', marginBottom: '10px' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                        <thead><tr style={{ textAlign: 'left', borderBottom: `1px solid ${COLORS.border}` }}><th style={{ padding: '6px' }}>Fecha</th><th style={{ padding: '6px' }}>Operario</th><th style={{ padding: '6px' }}>Buenas</th><th style={{ padding: '6px' }}>Defectuosas</th></tr></thead>
+                        <tbody>{detalle.lotes.map(l => (<tr key={l.id} style={{ borderBottom: `1px solid ${COLORS.border}` }}><td style={{ padding: '6px' }}>{new Date(l.fecha).toLocaleDateString('es-CO')}</td><td style={{ padding: '6px' }}>{l.operario_nombre}</td><td style={{ padding: '6px', color: COLORS.success }}>{l.unidades_buenas}</td><td style={{ padding: '6px', color: (l.unidades_defectuosas || 0) > 0 ? COLORS.danger : '#999' }}>{l.unidades_defectuosas}</td></tr>))}</tbody>
+                      </table>
+                    </div>
+                  ) : (<p style={{ fontSize: '13px', color: '#999', marginBottom: '10px' }}>Todavía no hay producción registrada para esta referencia.</p>)}
+                </>
+              )}
+            </div>
           </div>
         )}
       </div>
