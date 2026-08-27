@@ -431,13 +431,18 @@ def get_tipos_balon():
             Pedido.estado.in_(['pendiente', 'en_proceso'])
         ).scalar()
 
+        # Antes esto pasaba por Produccion.pedido_id -> Pedido -> PedidoBalon,
+        # así que cualquier registro de producción SIN pedido vinculado (algo
+        # muy común, el pedido es opcional en el formulario) quedaba fuera del
+        # conteo -> por eso casi todas las referencias mostraban Stock: 0.
+        # Produccion.tipo_balon_id es directo y confiable, se usa ese.
         fabricadas = db.session.query(
             db.func.coalesce(db.func.sum(Produccion.unidades_buenas), 0)
-        ).join(Pedido, Produccion.pedido_id == Pedido.id).join(
-            PedidoBalon, PedidoBalon.pedido_id == Pedido.id
-        ).filter(
-            PedidoBalon.tipo_balon_id == tipo.id
-        ).scalar()
+        ).filter(Produccion.tipo_balon_id == tipo.id).scalar()
+
+        defectuosas = db.session.query(
+            db.func.coalesce(db.func.sum(Produccion.unidades_defectuosas), 0)
+        ).filter(Produccion.tipo_balon_id == tipo.id).scalar()
 
         stock_actual = max(0.0, float(fabricadas) - float(entregadas))
 
@@ -453,6 +458,9 @@ def get_tipos_balon():
             'id': tipo.id,
             'nombre': tipo.nombre,
             'metricas': {
+                'fabricadas': float(fabricadas),
+                'defectuosas': float(defectuosas),
+                'entregadas': float(entregadas),
                 'stock_actual': float(stock_actual),
                 'pendientes': float(pendientes),
                 'disponibles': float(stock_actual),
@@ -485,13 +493,14 @@ def get_metricas_tipo_balon(tipo_id):
         PedidoBalon.tipo_balon_id == tipo_id,
         Pedido.estado.in_(['pendiente', 'en_proceso'])
     ).scalar()
+    # Igual que en el listado: Produccion.tipo_balon_id es directo y confiable,
+    # no depende de que el registro tenga un pedido vinculado.
     fabricadas = db.session.query(
         db.func.coalesce(db.func.sum(Produccion.unidades_buenas), 0)
-    ).join(Pedido, Produccion.pedido_id == Pedido.id).join(
-        PedidoBalon, PedidoBalon.pedido_id == Pedido.id
-    ).filter(
-        PedidoBalon.tipo_balon_id == tipo_id
-    ).scalar()
+    ).filter(Produccion.tipo_balon_id == tipo_id).scalar()
+    defectuosas = db.session.query(
+        db.func.coalesce(db.func.sum(Produccion.unidades_defectuosas), 0)
+    ).filter(Produccion.tipo_balon_id == tipo_id).scalar()
     stock_actual = max(0.0, float(fabricadas) - float(entregadas))
 
     semaforo = 'verde'
@@ -502,15 +511,31 @@ def get_metricas_tipo_balon(tipo_id):
     elif stock_actual == 0 and pendientes == 0:
         semaforo = 'rojo'
 
+    # Trazabilidad de lotes: últimos registros de producción de esta
+    # referencia, para la tabla que el frontend pinta en el detalle.
+    registros = Produccion.query.filter_by(tipo_balon_id=tipo_id) \
+        .order_by(Produccion.fecha.desc()).limit(50).all()
+    lotes = [{
+        'id': r.id,
+        'fecha': r.fecha.isoformat(),
+        'operario_nombre': r.operario.nombre if r.operario else None,
+        'unidades_buenas': r.unidades_buenas,
+        'unidades_defectuosas': r.unidades_defectuosas
+    } for r in registros]
+
     return jsonify({
         'tipo_balon_id': tipo_balon.id,
         'nombre': tipo_balon.nombre,
-        'fabricadas': float(fabricadas),
-        'entregadas': float(entregadas),
-        'pendientes': float(pendientes),
-        'disponibles': float(stock_actual),
-        'stock_actual': stock_actual,
-        'semaforo': semaforo
+        'metricas': {
+            'fabricadas': float(fabricadas),
+            'defectuosas': float(defectuosas),
+            'entregadas': float(entregadas),
+            'pendientes': float(pendientes),
+            'disponibles': float(stock_actual),
+            'stock_actual': stock_actual,
+            'semaforo': semaforo
+        },
+        'lotes': lotes
     })
 
 
