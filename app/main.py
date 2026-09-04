@@ -26,6 +26,7 @@ from app.api import webhook
 
 app.include_router(webhook.router, prefix="/api/v1", tags=["Webhook"])
 
-@app.get("/")
+# Cambiamos solo esta parte para admitir GET y HEAD
+@app.api_route("/", methods=["GET", "HEAD"])
 def read_root():
     return {"status": "ok", "message": "API Cotizador TRILAK SPORT funcionando correctamente"}
