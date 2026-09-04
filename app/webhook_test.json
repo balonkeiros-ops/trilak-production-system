@@ -1,0 +1,14 @@
+{
+  "entry": [{
+    "changes": [{
+      "value": {
+        "contacts": [{"profile": {"name": "Cliente Prueba"}}],
+        "messages": [{
+          "from": "573175754903",
+          "type": "text",
+          "text": {"body": "Necesito 150 balones de futbol numero 5 con logo, entrega en Bogota"}
+        }]
+      }
+    }]
+  }]
+}
