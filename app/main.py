@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # Importación de esquemas (si usas ChatRequest/ChatResponse)
 from app.schemas import ChatRequest, ChatResponse
 from app.services.gemini_service import procesar_mensaje_cliente
-
+# from app.services.gemini_service import procesar_mensaje_cliente
 app = FastAPI(
     title="TRILAK SPORT / KEIROS - API Cotizador",
     version="1.0.0",
