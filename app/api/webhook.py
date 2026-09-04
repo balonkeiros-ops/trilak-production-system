@@ -187,3 +187,16 @@ def aprobar_cotizacion(numero_cliente: str):
     COTIZACIONES_PENDIENTES.pop(numero_cliente, None)
     ESTADOS_CONVERSACION.pop(numero_cliente, None)
     return {"status": "enviado", "numero_cliente": numero_cliente}
+    # ---------------------------------------------------------------------------
+# Endpoint de pruebas para Swagger / Postman (No afecta el flujo de WhatsApp)
+# ---------------------------------------------------------------------------
+@router.post("/webhook/test-chat", response_model=ChatResponse)
+async def probar_chat_manual(payload: ChatRequest):
+    """
+    Endpoint exclusivo para hacer pruebas desde la interfaz de Swagger.
+    """
+    try:
+        respuesta = await procesar_mensaje_openai(payload.mensaje)
+        return ChatResponse(respuesta=respuesta)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
