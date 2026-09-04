@@ -23,6 +23,8 @@ ESTADOS_CONVERSACION por Redis o una tabla en la base de datos
 from fastapi import APIRouter, Request, Query, HTTPException
 from fastapi.responses import PlainTextResponse
 
+from app.schemas import ChatRequest, ChatResponse
+from app.services.openai_service import procesar_mensaje_openai
 from app.core.config import settings
 from app.core.llm import interpretar_mensaje, redactar_pregunta_aclaratoria
 from app.core.pricing import buscar_producto, calcular_precio
