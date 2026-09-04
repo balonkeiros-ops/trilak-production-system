@@ -24,7 +24,7 @@ from fastapi import APIRouter, Request, Query, HTTPException
 from fastapi.responses import PlainTextResponse
 
 from app.schemas import ChatRequest, ChatResponse
-from app.services.openai_service import procesar_mensaje_openai
+from app.services.openai_service import procesar_mensaje_cliente
 from app.core.config import settings
 from app.core.llm import interpretar_mensaje, redactar_pregunta_aclaratoria
 from app.core.pricing import buscar_producto, calcular_precio
@@ -190,15 +190,16 @@ def aprobar_cotizacion(numero_cliente: str):
     ESTADOS_CONVERSACION.pop(numero_cliente, None)
     return {"status": "enviado", "numero_cliente": numero_cliente}
     # ---------------------------------------------------------------------------
-# Endpoint de pruebas para Swagger / Postman (No afecta el flujo de WhatsApp)
+# ---------------------------------------------------------------------------
+# Endpoint de pruebas para Swagger / Postman
 # ---------------------------------------------------------------------------
 @router.post("/webhook/test-chat", response_model=ChatResponse)
-async def probar_chat_manual(payload: ChatRequest):
+def probar_chat_manual(payload: ChatRequest):
     """
     Endpoint exclusivo para hacer pruebas desde la interfaz de Swagger.
     """
     try:
-        respuesta = await procesar_mensaje_openai(payload.mensaje)
+        respuesta = procesar_mensaje_cliente(payload.mensaje)
         return ChatResponse(respuesta=respuesta)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
