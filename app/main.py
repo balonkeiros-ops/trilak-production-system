@@ -1,3 +1,5 @@
+# Comenta esta línea:
+# from app.services.gemini_service import procesar_mensaje_cliente
 from typing import List, Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
