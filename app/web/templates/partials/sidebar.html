@@ -1,0 +1,44 @@
+<div class="flex flex-col h-full">
+  <div class="px-5 py-6 border-b border-white/10 bg-white flex items-center justify-center">
+    <img src="/assets/logo.png" alt="Trilak Sport" class="h-16 w-auto">
+  </div>
+
+  <nav class="flex-1 px-3 py-4 overflow-y-auto">
+    <a href="/" class="nav-item {% if page == 'dashboard' %}active{% endif %}">
+      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>
+      </svg>
+      <span>Dashboard</span>
+    </a>
+    <a href="/nueva-cotizacion" class="nav-item {% if page == 'nueva' %}active{% endif %}">
+      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+      </svg>
+      <span>Nueva Cotización</span>
+    </a>
+    <a href="/leer-pdf" class="nav-item {% if page == 'leer_pdf' %}active{% endif %}">
+      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
+      </svg>
+      <span>Leer PDF Cliente</span>
+    </a>
+    <a href="/historial" class="nav-item {% if page == 'historial' %}active{% endif %}">
+      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 3h18v18H3z"/><path d="M3 9h18M3 15h18M9 3v18"/>
+      </svg>
+      <span>Historial</span>
+    </a>
+    <a href="/catalogo-web" class="nav-item {% if page == 'catalogo' %}active{% endif %}">
+      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+      </svg>
+      <span>Catálogo</span>
+    </a>
+  </nav>
+
+  <div class="px-5 py-4 border-t border-white/10 text-xs text-gray-400">
+    <p class="font-semibold text-gray-300">TRILAK SPORT S.A.S.</p>
+    <p>NIT 900464121-9</p>
+    <p class="mt-1"><a href="/docs" target="_blank" class="hover:text-keiros-green">API Docs →</a></p>
+  </div>
+</div>

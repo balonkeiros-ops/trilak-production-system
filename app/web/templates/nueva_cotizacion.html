@@ -1,0 +1,403 @@
+
+{% extends "base.html" %}
+{% block title %}Nueva Cotización · Trilak{% endblock %}
+
+{% block content %}
+<div x-data="cotizadorApp()" x-init="init()" class="fade-in">
+
+  <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
+    <div>
+      <h1 class="text-2xl sm:text-3xl font-bold text-keiros-gray-dark">Nueva Cotización</h1>
+      <p class="text-sm text-gray-500 mt-1">Ingresa cliente, agrega productos y genera el PDF</p>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+    <!-- COLUMNA IZQUIERDA -->
+    <div class="lg:col-span-2 space-y-6">
+
+      <!-- DATOS DEL CLIENTE -->
+      <div class="card">
+        <h2 class="text-lg font-bold mb-4 flex items-center gap-2">
+          <span class="w-8 h-8 rounded-full bg-keiros-green text-keiros-gray-dark flex items-center justify-center text-sm font-bold">1</span>
+          Datos del cliente
+        </h2>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div class="sm:col-span-2">
+            <label class="label">Nombre del cliente *</label>
+            <input type="text" class="input" x-model="cliente.nombre_cliente" placeholder="Ej: Juan Pérez" required>
+          </div>
+          <div>
+            <label class="label">Empresa</label>
+            <input type="text" class="input" x-model="cliente.empresa_cliente" placeholder="Ej: Comercializadora Soul">
+          </div>
+          <div>
+            <label class="label">Teléfono</label>
+            <input type="tel" class="input" x-model="cliente.telefono_cliente" placeholder="Ej: 3115033171">
+          </div>
+          <div>
+            <label class="label">Ciudad de entrega</label>
+            <input type="text" class="input" x-model="cliente.ciudad_entrega" placeholder="Ej: Bogotá">
+          </div>
+          <div>
+            <label class="label">Asesor</label>
+            <input type="text" class="input" x-model="cliente.creado_por" placeholder="Tu nombre">
+          </div>
+          <div>
+            <label class="label">Validez (días)</label>
+            <input type="number" class="input" x-model.number="cliente.validez_dias" min="1" max="90">
+          </div>
+        </div>
+      </div>
+
+      <!-- BUSCADOR DE PRODUCTOS -->
+      <div class="card">
+        <h2 class="text-lg font-bold mb-4 flex items-center gap-2">
+          <span class="w-8 h-8 rounded-full bg-keiros-green text-keiros-gray-dark flex items-center justify-center text-sm font-bold">2</span>
+          Agregar productos
+        </h2>
+
+        <div class="relative">
+          <input type="text" class="input pl-10" x-model="busqueda" @input.debounce.200ms="buscar()"
+                 @focus="mostrarResultados = true" placeholder="Escribe para buscar (ej: balón, voley, cono, malla...)">
+          <svg class="absolute left-3 top-3 text-gray-400" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+
+          <!-- Resultados -->
+          <div x-show="mostrarResultados && resultados.length > 0"
+               @click.outside="mostrarResultados = false"
+               class="absolute z-20 mt-2 w-full bg-white border border-gray-200 rounded-lg shadow-xl max-h-80 overflow-y-auto"
+               style="display:none;">
+            <template x-for="p in resultados" :key="p.id">
+              <button @click="agregarProducto(p)"
+                      class="w-full text-left px-4 py-3 hover:bg-keiros-green-soft border-b border-gray-100 last:border-0 transition">
+                <div class="flex justify-between items-start gap-3">
+                  <div class="flex-1 min-w-0">
+                    <p class="font-semibold text-sm text-keiros-gray-dark truncate" x-text="p.descripcion"></p>
+                    <p class="text-xs text-gray-500 mt-0.5">
+                      <span x-text="p.referencia"></span>
+                      <span x-show="p.categoria"> · </span>
+                      <span x-text="p.categoria"></span>
+                    </p>
+                  </div>
+                  <div class="text-right shrink-0">
+                    <p class="font-bold text-sm text-keiros-gray-dark" x-text="formatCOP(p.precio_unitario)"></p>
+                    <p class="text-xs text-gray-500">sin IVA</p>
+                  </div>
+                </div>
+              </button>
+            </template>
+          </div>
+
+          <div x-show="mostrarResultados && busqueda.length >= 2 && resultados.length === 0 && !cargandoBusqueda"
+               class="absolute z-20 mt-2 w-full bg-white border border-gray-200 rounded-lg shadow-xl p-4 text-center text-sm text-gray-500"
+               style="display:none;">
+            No se encontraron productos con "<span x-text="busqueda"></span>"
+          </div>
+        </div>
+
+        <p class="text-xs text-gray-500 mt-2">
+          Sinónimos reconocidos: voley = voleibol · basquet = baloncesto · sala = futsal · micro = microfutbol
+        </p>
+      </div>
+
+      <!-- TABLA DE ÍTEMS -->
+      <div class="card">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-lg font-bold flex items-center gap-2">
+            <span class="w-8 h-8 rounded-full bg-keiros-green text-keiros-gray-dark flex items-center justify-center text-sm font-bold">3</span>
+            Ítems de la cotización
+          </h2>
+          <span class="badge badge-gray" x-text="items.length + ' ítems'"></span>
+        </div>
+
+        <div x-show="items.length === 0" class="py-8 text-center text-gray-400">
+          <p class="text-sm">Busca y agrega productos arriba para comenzar.</p>
+        </div>
+
+        <div x-show="items.length > 0" class="overflow-x-auto">
+          <table class="table-keiros">
+            <thead>
+              <tr>
+                <th>Producto</th>
+                <th class="w-24">Cant.</th>
+                <th class="text-right hidden sm:table-cell">V. Unit.</th>
+                <th class="text-right hidden md:table-cell">Desc.</th>
+                <th class="text-right">Total</th>
+                <th class="w-12"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="(item, idx) in items" :key="item._key">
+                <tr>
+                  <td>
+                    <p class="font-semibold text-sm" x-text="item.descripcion"></p>
+                    <p class="text-xs text-gray-500" x-text="item.referencia"></p>
+                  </td>
+                  <td>
+                    <input type="number" min="1" x-model.number="item.cantidad" @input="recalcular()"
+                           class="input py-1 px-2 text-sm text-center">
+                  </td>
+                  <td class="text-right text-sm hidden sm:table-cell" x-text="formatCOP(item.precio_unitario)"></td>
+                  <td class="text-right text-sm hidden md:table-cell">
+                    <span x-show="item.descuento_pct > 0" class="badge badge-green" x-text="'-' + item.descuento_pct + '%'"></span>
+                    <span x-show="item.descuento_pct === 0" class="text-xs text-gray-400">—</span>
+                  </td>
+                  <td class="text-right font-semibold text-sm" x-text="formatCOP(item.total)"></td>
+                  <td>
+                    <button @click="quitarItem(idx)" class="text-red-500 hover:text-red-700 p-1">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                      </svg>
+                    </button>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- COLUMNA DERECHA: RESUMEN -->
+    <div class="lg:col-span-1">
+      <div class="card sticky top-4">
+        <h2 class="text-lg font-bold mb-4">Resumen</h2>
+
+        <div class="space-y-2 text-sm mb-4">
+          <div class="flex justify-between">
+            <span class="text-gray-600">Subtotal</span>
+            <span class="font-semibold" x-text="formatCOP(totales.subtotal)"></span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-gray-600">IVA 19%</span>
+            <span class="font-semibold" x-text="formatCOP(totales.iva)"></span>
+          </div>
+          <div class="border-t border-gray-200 pt-3 mt-3 flex justify-between text-lg">
+            <span class="font-bold">Total</span>
+            <span class="font-bold text-keiros-gray-dark" x-text="formatCOP(totales.total)"></span>
+          </div>
+        </div>
+
+        <button @click="generarCotizacion()" :disabled="enviando || items.length === 0 || !cliente.nombre_cliente"
+                class="btn btn-primary w-full mb-2">
+          <svg x-show="!enviando" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
+          </svg>
+          <svg x-show="enviando" class="spin" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+          </svg>
+          <span x-text="enviando ? 'Generando...' : 'Generar cotización y PDF'"></span>
+        </button>
+
+        <button @click="limpiar()" :disabled="enviando || items.length === 0" class="btn btn-secondary w-full">
+          Limpiar todo
+        </button>
+
+        <p class="text-xs text-gray-500 mt-3 text-center">
+          El PDF se genera al instante y queda guardado en el historial.
+        </p>
+      </div>
+    </div>
+
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/api.js"></script>
+<script>
+function cotizadorApp() {
+  return {
+    cliente: {
+      nombre_cliente: '',
+      empresa_cliente: '',
+      telefono_cliente: '',
+      ciudad_entrega: '',
+      creado_por: '',
+      validez_dias: 15,
+    },
+
+    busqueda: '',
+    resultados: [],
+    mostrarResultados: false,
+    cargandoBusqueda: false,
+
+    items: [],
+    _keyCounter: 0,
+
+    enviando: false,
+    totales: { subtotal: 0, iva: 0, total: 0 },
+
+    async init() {
+      const asesor = localStorage.getItem('asesor_nombre');
+      if (asesor) this.cliente.creado_por = asesor;
+    },
+
+    async buscar() {
+      if (this.busqueda.length < 2) {
+        this.resultados = [];
+        return;
+      }
+      this.cargandoBusqueda = true;
+      this.mostrarResultados = true;
+
+      const SINONIMOS = {
+        'voley': 'voleibol',
+        'voleybol': 'voleibol',
+        'voleyball': 'voleibol',
+        'basquet': 'baloncesto',
+        'basquetbol': 'baloncesto',
+        'basket': 'baloncesto',
+        'balompie': 'futbol',
+        'futbolsala': 'futsal',
+        'sala': 'futsal',
+        'micro': 'microfutbol',
+      };
+
+      const normalizar = (s) => (s || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '');
+
+      try {
+        const todos = await API.get('/catalogo/productos');
+
+        const palabras = normalizar(this.busqueda)
+          .split(/\s+/)
+          .filter(w => w.length >= 2)
+          .map(w => SINONIMOS[w] || w);
+
+        this.resultados = todos
+          .filter(p => {
+            const texto = normalizar(
+              (p.descripcion || '') + ' ' + (p.referencia || '') + ' ' + (p.categoria || '')
+            );
+            return palabras.every(w => texto.includes(w));
+          })
+          .slice(0, 15);
+      } catch (err) {
+        toast('Error buscando productos: ' + err.message, 'error');
+      } finally {
+        this.cargandoBusqueda = false;
+      }
+    },
+
+    agregarProducto(producto) {
+      const existente = this.items.find(i => i.referencia === producto.referencia);
+      if (existente) {
+        existente.cantidad += 1;
+      } else {
+        this.items.push({
+          _key: ++this._keyCounter,
+          id: producto.id,
+          referencia: producto.referencia,
+          descripcion: producto.descripcion,
+          categoria: producto.categoria,
+          precio_unitario: Number(producto.precio_unitario) || 0,
+          iva_pct: Number(producto.iva_pct) || 19,
+          aplica_descuento_escala: !!producto.aplica_descuento_escala,
+          cantidad: 1,
+          descuento_pct: 0,
+          subtotal: 0,
+          iva: 0,
+          total: 0,
+        });
+      }
+      this.busqueda = '';
+      this.resultados = [];
+      this.mostrarResultados = false;
+      this.recalcular();
+      toast('Producto agregado');
+    },
+
+    quitarItem(idx) {
+      this.items.splice(idx, 1);
+      this.recalcular();
+    },
+
+    calcularDescuento(item) {
+      if (!item.aplica_descuento_escala) return 0;
+      const c = item.cantidad;
+      if (c <= 50) return 0;
+      if (c <= 200) return 2.5;
+      if (c <= 500) return 5.0;
+      if (c <= 1000) return 7.5;
+      if (c <= 2000) return 10.0;
+      return 12.5;
+    },
+
+    recalcular() {
+      let subtotal = 0, iva = 0;
+      for (const item of this.items) {
+        const desc = this.calcularDescuento(item);
+        item.descuento_pct = desc;
+        const precioFinal = item.precio_unitario * (1 - desc / 100);
+        item.subtotal = Math.round(precioFinal * item.cantidad);
+        item.iva = Math.round(item.subtotal * (item.iva_pct / 100));
+        item.total = item.subtotal + item.iva;
+        subtotal += item.subtotal;
+        iva += item.iva;
+      }
+      this.totales = { subtotal, iva, total: subtotal + iva };
+    },
+
+    async generarCotizacion() {
+      if (!this.cliente.nombre_cliente) {
+        toast('Ingresa el nombre del cliente', 'error');
+        return;
+      }
+      if (this.items.length === 0) {
+        toast('Agrega al menos un producto', 'error');
+        return;
+      }
+
+      if (this.cliente.creado_por) {
+        localStorage.setItem('asesor_nombre', this.cliente.creado_por);
+      }
+
+      this.enviando = true;
+      try {
+        const payload = {
+          nombre_cliente: this.cliente.nombre_cliente,
+          empresa_cliente: this.cliente.empresa_cliente || null,
+          telefono_cliente: this.cliente.telefono_cliente || null,
+          ciudad_entrega: this.cliente.ciudad_entrega || null,
+          creado_por: this.cliente.creado_por || null,
+          validez_dias: this.cliente.validez_dias || 15,
+          items: this.items.map(i => ({ referencia: i.referencia, cantidad: i.cantidad })),
+        };
+
+        const resp = await API.post('/cotizar', payload);
+
+        toast('¡Cotización ' + resp.numero + ' generada!');
+        window.open(resp.pdf_url, '_blank');
+        this.limpiar();
+      } catch (err) {
+        toast('Error: ' + err.message, 'error');
+        console.error(err);
+      } finally {
+        this.enviando = false;
+      }
+    },
+
+    limpiar() {
+      this.items = [];
+      this.busqueda = '';
+      this.resultados = [];
+      this.totales = { subtotal: 0, iva: 0, total: 0 };
+      this.cliente.nombre_cliente = '';
+      this.cliente.empresa_cliente = '';
+      this.cliente.telefono_cliente = '';
+      this.cliente.ciudad_entrega = '';
+    },
+
+    formatCOP,
+  };
+}
+</script>
+{% endblock %}

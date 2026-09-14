@@ -1,0 +1,24 @@
+# Variables de entorno (NUNCA subir al repo)
+.env
+.env.local
+.env.*.local
+
+# Base de datos local
+*.db
+trilak_local.db
+
+# Bytecode Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Venv
+venv/
+env/
+
+# Archivos temporales
+.DS_Store
+*.log
+
+# Exports temporales (los del usuario)
+data/imports/~*

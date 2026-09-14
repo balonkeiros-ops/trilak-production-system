@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Cotizador · TRILAK SPORT{% endblock %}</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            'keiros-green': '#5ee045',
+            'keiros-green-dark': '#4bb838',
+            'keiros-gray': '#4d4d4d',
+            'keiros-gray-dark': '#333333',
+          }
+        }
+      }
+    };
+  </script>
+
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="/static/css/custom.css">
+  {% block head %}{% endblock %}
+</head>
+
+<body class="bg-gray-50 text-keiros-gray-dark min-h-screen">
+<div x-data="{ sidebarOpen: false }" class="min-h-screen">
+
+  <aside class="hidden lg:flex lg:flex-col fixed inset-y-0 left-0 w-64 bg-keiros-gray text-white z-30">
+    {% include "partials/sidebar.html" %}
+  </aside>
+
+  <div x-show="sidebarOpen" x-transition.opacity @click="sidebarOpen = false"
+       class="fixed inset-0 bg-black/60 z-40 lg:hidden" style="display:none;"></div>
+
+  <aside x-show="sidebarOpen"
+         x-transition:enter="transition transform duration-200"
+         x-transition:enter-start="-translate-x-full"
+         x-transition:enter-end="translate-x-0"
+         x-transition:leave="transition transform duration-200"
+         x-transition:leave-start="translate-x-0"
+         x-transition:leave-end="-translate-x-full"
+         class="fixed inset-y-0 left-0 w-64 bg-keiros-gray text-white z-50 lg:hidden"
+         style="display:none;">
+    {% include "partials/sidebar.html" %}
+  </aside>
+
+  <div class="lg:pl-64">
+    <header class="lg:hidden sticky top-0 z-20 bg-white border-b border-gray-200 flex items-center justify-between px-4 py-3 shadow-sm">
+      <button @click="sidebarOpen = true" class="p-2 rounded-lg hover:bg-gray-100">
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+        </svg>
+      </button>
+      <img src="/assets/logo.png" alt="Trilak" class="h-8">
+      <div class="w-10"></div>
+    </header>
+
+    <main class="p-4 sm:p-6 lg:p-8 max-w-[1600px] mx-auto">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</div>
+
+{% block scripts %}{% endblock %}
+</body>
+</html>

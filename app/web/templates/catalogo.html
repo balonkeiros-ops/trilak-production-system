@@ -1,0 +1,368 @@
+{% extends "base.html" %}
+{% block title %}Catálogo · Trilak{% endblock %}
+
+{% block content %}
+<div x-data="catalogoApp()" x-init="init()" class="fade-in">
+
+  <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
+    <div>
+      <h1 class="text-2xl sm:text-3xl font-bold text-keiros-gray-dark">Catálogo</h1>
+      <p class="text-sm text-gray-500 mt-1">Gestiona productos, precios y escalas de descuento</p>
+    </div>
+    <div class="flex gap-2 self-start sm:self-auto">
+      <button @click="mostrarUpload = true" class="btn btn-primary">
+        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="17 8 12 3 7 8"/>
+          <line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+        Subir Excel
+      </button>
+    </div>
+  </div>
+
+  <!-- RESUMEN -->
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+    <div class="card">
+      <p class="text-xs font-semibold uppercase tracking-wider text-gray-500">Total productos</p>
+      <p class="text-3xl font-bold text-keiros-gray-dark mt-1" x-text="productos.length"></p>
+    </div>
+    <div class="card">
+      <p class="text-xs font-semibold uppercase tracking-wider text-gray-500">Activos</p>
+      <p class="text-3xl font-bold text-green-700 mt-1" x-text="contarActivos"></p>
+    </div>
+    <div class="card">
+      <p class="text-xs font-semibold uppercase tracking-wider text-gray-500">Con escala</p>
+      <p class="text-3xl font-bold text-blue-700 mt-1" x-text="contarConEscala"></p>
+    </div>
+    <div class="card">
+      <p class="text-xs font-semibold uppercase tracking-wider text-gray-500">Categorías</p>
+      <p class="text-3xl font-bold text-purple-700 mt-1" x-text="categorias.length"></p>
+    </div>
+  </div>
+
+  <!-- FILTROS -->
+  <div class="card mb-6">
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div class="sm:col-span-2">
+        <label class="label">Buscar</label>
+        <input type="text" class="input pl-10" x-model="filtro.texto"
+               placeholder="Referencia, descripción o dimensión...">
+      </div>
+      <div>
+        <label class="label">Categoría</label>
+        <select class="input" x-model="filtro.categoria">
+          <option value="">Todas</option>
+          <template x-for="c in categorias" :key="c">
+            <option :value="c" x-text="c"></option>
+          </template>
+        </select>
+      </div>
+    </div>
+    <div class="flex flex-wrap gap-3 mt-4 items-center">
+      <label class="flex items-center gap-2 text-sm cursor-pointer">
+        <input type="checkbox" x-model="filtro.soloEscala" class="rounded">
+        <span>Solo con escala de descuento</span>
+      </label>
+      <label class="flex items-center gap-2 text-sm cursor-pointer">
+        <input type="checkbox" x-model="filtro.soloInactivos" class="rounded">
+        <span>Solo inactivos</span>
+      </label>
+      <button @click="limpiarFiltros()" class="text-sm text-keiros-gray hover:text-keiros-green-dark underline">
+        Limpiar filtros
+      </button>
+      <span class="text-sm text-gray-500 ml-auto">
+        <strong x-text="productosFiltrados.length"></strong> de <strong x-text="productos.length"></strong> productos
+      </span>
+    </div>
+  </div>
+
+  <!-- CARGANDO -->
+  <div x-show="cargando" class="card py-12 text-center text-gray-400">
+    <svg class="spin inline-block" xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+    </svg>
+    <p class="mt-3">Cargando catálogo...</p>
+  </div>
+
+  <!-- TABLA -->
+  <div x-show="!cargando" class="card">
+    <div class="overflow-x-auto">
+      <table class="table-keiros">
+        <thead>
+          <tr>
+            <th>Referencia</th>
+            <th>Descripción</th>
+            <th class="hidden md:table-cell">Categoría</th>
+            <th class="text-right">Precio (sin IVA)</th>
+            <th class="text-center hidden sm:table-cell">Escala</th>
+            <th class="text-center">Estado</th>
+            <th class="w-16"></th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-for="p in productosFiltrados" :key="p.id">
+            <tr :class="!p.activo ? 'opacity-50' : ''">
+              <td class="font-mono text-xs font-semibold whitespace-nowrap" x-text="p.referencia"></td>
+              <td>
+                <p class="text-sm font-medium" x-text="p.descripcion"></p>
+                <p class="text-xs text-gray-500" x-show="p.dimension" x-text="p.dimension"></p>
+              </td>
+              <td class="hidden md:table-cell">
+                <span class="badge badge-gray text-xs" x-text="p.categoria"></span>
+              </td>
+              <td class="text-right font-semibold text-sm whitespace-nowrap" x-text="formatCOP(p.precio_unitario)"></td>
+              <td class="text-center hidden sm:table-cell">
+                <span x-show="p.aplica_descuento_escala" class="badge badge-green text-xs">Sí</span>
+                <span x-show="!p.aplica_descuento_escala" class="text-xs text-gray-400">—</span>
+              </td>
+              <td class="text-center">
+                <span x-show="p.activo" class="badge badge-green text-xs">Activo</span>
+                <span x-show="!p.activo" class="badge badge-red text-xs">Inactivo</span>
+              </td>
+              <td class="text-center">
+                <button @click="toggleActivo(p)"
+                        class="text-xs p-1 hover:bg-gray-100 rounded"
+                        :title="p.activo ? 'Desactivar' : 'Activar'">
+                  <svg x-show="p.activo" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M18 6 6 18M6 6l12 12"/>
+                  </svg>
+                  <svg x-show="!p.activo" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="20 6 9 17 4 12"/>
+                  </svg>
+                </button>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+
+      <div x-show="!cargando && productosFiltrados.length === 0" class="py-12 text-center text-gray-400">
+        <p class="text-sm">No hay productos que coincidan con los filtros.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: SUBIR EXCEL -->
+  <div x-show="mostrarUpload" x-transition.opacity
+       class="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
+       style="display:none;"
+       @click.self="cerrarUpload()">
+
+    <div class="bg-white rounded-lg shadow-xl max-w-lg w-full p-6">
+      <div class="flex justify-between items-start mb-4">
+        <div>
+          <h3 class="text-lg font-bold text-keiros-gray-dark">Cargar catálogo por Excel</h3>
+          <p class="text-xs text-gray-500 mt-1">Actualiza productos existentes e inserta nuevos</p>
+        </div>
+        <button @click="cerrarUpload()" class="text-gray-400 hover:text-gray-600 text-xl">&times;</button>
+      </div>
+
+      <div class="mb-4 p-3 bg-blue-50 rounded text-xs text-blue-900">
+        <p class="font-semibold mb-1">Formato esperado (hoja "Productos"):</p>
+        <p><code>referencia · categoria · descripcion · dimension · precio_unitario · iva_pct · especificaciones · aplica_descuento_escala</code></p>
+        <p class="mt-2">Hoja "Escalas" (opcional): <code>categoria · escala · cantidad_min · cantidad_max · descuento_pct</code></p>
+      </div>
+
+      <div x-show="!archivoSeleccionado" class="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-keiros-green"
+           @dragover.prevent
+           @drop.prevent="seleccionarArchivo($event.dataTransfer.files[0])">
+        <input type="file" accept=".xlsx,.xls" @change="seleccionarArchivo($event.target.files[0])"
+               class="hidden" x-ref="fileUploadInput">
+        <button @click="$refs.fileUploadInput.click()" class="btn btn-secondary">
+          Seleccionar archivo .xlsx
+        </button>
+        <p class="text-xs text-gray-500 mt-2">o arrástralo aquí</p>
+      </div>
+
+      <div x-show="archivoSeleccionado" class="p-3 bg-gray-50 rounded flex items-center gap-3">
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+        </svg>
+        <div class="flex-1 min-w-0">
+          <p class="text-sm font-semibold truncate" x-text="archivoSeleccionado?.name"></p>
+          <p class="text-xs text-gray-500" x-text="tamanoArchivo"></p>
+        </div>
+        <button @click="archivoSeleccionado = null" class="text-red-500 text-sm">Quitar</button>
+      </div>
+
+      <!-- Resultado -->
+      <div x-show="resultadoUpload" class="mt-4 p-3 bg-green-50 rounded text-sm">
+        <p class="font-semibold text-green-800">✅ Carga completada</p>
+        <ul class="text-xs text-green-700 mt-2 space-y-1">
+          <li x-text="`Productos creados: ${resultadoUpload?.productos_creados}`"></li>
+          <li x-text="`Productos actualizados: ${resultadoUpload?.productos_actualizados}`"></li>
+          <li x-text="`Escalas cargadas: ${resultadoUpload?.escalas_cargadas}`"></li>
+        </ul>
+        <div x-show="resultadoUpload?.errores?.length > 0" class="mt-2 text-xs text-red-700">
+          <p class="font-semibold">Errores:</p>
+          <ul class="list-disc list-inside max-h-32 overflow-auto">
+            <template x-for="(err, i) in resultadoUpload.errores" :key="i">
+              <li x-text="err"></li>
+            </template>
+          </ul>
+        </div>
+      </div>
+
+      <div class="flex gap-2 justify-end mt-6">
+        <button @click="cerrarUpload()" class="btn btn-secondary">Cancelar</button>
+        <button @click="subirExcel()" :disabled="!archivoSeleccionado || subiendo" class="btn btn-primary">
+          <svg x-show="subiendo" class="spin" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+          </svg>
+          <span x-text="subiendo ? 'Subiendo...' : 'Cargar Excel'"></span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/api.js"></script>
+<script>
+function catalogoApp() {
+  return {
+    productos: [],
+    categorias: [],
+    cargando: true,
+
+    filtro: {
+      texto: '',
+      categoria: '',
+      soloEscala: false,
+      soloInactivos: false,
+    },
+
+    mostrarUpload: false,
+    archivoSeleccionado: null,
+    subiendo: false,
+    resultadoUpload: null,
+
+    async init() {
+      try {
+        const [prods, cats] = await Promise.all([
+          API.get('/catalogo/productos?solo_activos=false'),
+          API.get('/catalogo/categorias'),
+        ]);
+        this.productos = prods;
+        this.categorias = cats;
+      } catch (err) {
+        toast('Error cargando catálogo: ' + err.message, 'error');
+      } finally {
+        this.cargando = false;
+      }
+    },
+
+    get contarActivos() {
+      return this.productos.filter(p => p.activo).length;
+    },
+
+    get contarConEscala() {
+      return this.productos.filter(p => p.aplica_descuento_escala).length;
+    },
+
+    get productosFiltrados() {
+      const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      const q = norm(this.filtro.texto);
+
+      return this.productos.filter(p => {
+        if (this.filtro.categoria && p.categoria !== this.filtro.categoria) return false;
+        if (this.filtro.soloEscala && !p.aplica_descuento_escala) return false;
+        if (this.filtro.soloInactivos && p.activo) return false;
+        if (q) {
+          const texto = norm(`${p.referencia} ${p.descripcion} ${p.dimension || ''} ${p.categoria}`);
+          if (!texto.includes(q)) return false;
+        }
+        return true;
+      });
+    },
+
+    limpiarFiltros() {
+      this.filtro = { texto: '', categoria: '', soloEscala: false, soloInactivos: false };
+    },
+
+    async toggleActivo(p) {
+      const accion = p.activo ? 'desactivar' : 'activar';
+      if (!confirm(`¿Seguro que quieres ${accion} "${p.referencia}"?`)) return;
+
+      try {
+        if (p.activo) {
+          await API.del(`/catalogo/productos/${p.id}`);
+        } else {
+          // Reactivar: usar PUT con activo=true
+          await API.put(`/catalogo/productos/${p.id}`, {
+            referencia: p.referencia,
+            categoria: p.categoria,
+            descripcion: p.descripcion,
+            dimension: p.dimension,
+            especificaciones: p.especificaciones,
+            precio_unitario: p.precio_unitario,
+            iva_pct: p.iva_pct,
+            aplica_descuento_escala: p.aplica_descuento_escala,
+            activo: true,
+          });
+        }
+        p.activo = !p.activo;
+        toast(`Producto ${p.activo ? 'activado' : 'desactivado'}`);
+      } catch (err) {
+        toast('Error: ' + err.message, 'error');
+      }
+    },
+
+    seleccionarArchivo(file) {
+      if (!file) return;
+      if (!file.name.toLowerCase().endsWith('.xlsx') && !file.name.toLowerCase().endsWith('.xls')) {
+        toast('El archivo debe ser .xlsx o .xls', 'error');
+        return;
+      }
+      this.archivoSeleccionado = file;
+      this.resultadoUpload = null;
+    },
+
+    get tamanoArchivo() {
+      if (!this.archivoSeleccionado) return '';
+      const kb = Math.round(this.archivoSeleccionado.size / 1024);
+      return kb > 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${kb} KB`;
+    },
+
+    async subirExcel() {
+      if (!this.archivoSeleccionado) return;
+
+      this.subiendo = true;
+      try {
+        const formData = new FormData();
+        formData.append('archivo', this.archivoSeleccionado);
+
+        const resp = await API.post('/catalogo/upload-excel', formData);
+        this.resultadoUpload = resp;
+
+        // Recargar catálogo
+        const [prods, cats] = await Promise.all([
+          API.get('/catalogo/productos?solo_activos=false'),
+          API.get('/catalogo/categorias'),
+        ]);
+        this.productos = prods;
+        this.categorias = cats;
+
+        toast(`Carga exitosa: ${resp.productos_creados} nuevos, ${resp.productos_actualizados} actualizados`);
+      } catch (err) {
+        toast('Error: ' + err.message, 'error');
+      } finally {
+        this.subiendo = false;
+      }
+    },
+
+    cerrarUpload() {
+      this.mostrarUpload = false;
+      this.archivoSeleccionado = null;
+      this.resultadoUpload = null;
+    },
+
+    formatCOP,
+  };
+}
+</script>
+{% endblock %}

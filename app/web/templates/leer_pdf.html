@@ -1,0 +1,403 @@
+{% extends "base.html" %}
+{% block title %}Leer PDF del Cliente · Trilak{% endblock %}
+
+{% block content %}
+<div x-data="lectorPdfApp()" class="fade-in">
+
+  <div class="mb-6">
+    <h1 class="text-2xl sm:text-3xl font-bold text-keiros-gray-dark">Leer PDF del Cliente</h1>
+    <p class="text-sm text-gray-500 mt-1">Sube el pedido en PDF y la IA extraerá los productos automáticamente</p>
+  </div>
+
+  <!-- PASO 1: SUBIR PDF -->
+  <div x-show="paso === 'subir'" class="card">
+    <div class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-keiros-green transition"
+         @dragover.prevent="arrastrando = true"
+         @dragleave.prevent="arrastrando = false"
+         @drop.prevent="soltar($event)"
+         :class="arrastrando ? 'border-keiros-green bg-keiros-green-soft' : ''">
+
+      <svg class="mx-auto mb-4 text-gray-400" xmlns="http://www.w3.org/2000/svg" width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+        <polyline points="14 2 14 8 20 8"/>
+        <line x1="12" y1="18" x2="12" y2="12"/>
+        <polyline points="9 15 12 12 15 15"/>
+      </svg>
+
+      <p class="text-lg font-semibold text-keiros-gray-dark mb-2">
+        Arrastra el PDF aquí o haz clic para seleccionarlo
+      </p>
+      <p class="text-sm text-gray-500 mb-4">
+        El PDF debe tener texto seleccionable (no escaneado como imagen)
+      </p>
+
+      <input type="file" accept=".pdf" @change="subirArchivo($event)" class="hidden" x-ref="fileInput">
+
+      <button @click="$refs.fileInput.click()" :disabled="procesando" class="btn btn-primary">
+        <svg x-show="!procesando" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="17 8 12 3 7 8"/>
+          <line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+        <svg x-show="procesando" class="spin" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+        </svg>
+        <span x-text="procesando ? 'Analizando PDF...' : 'Seleccionar PDF'"></span>
+      </button>
+    </div>
+
+    <!-- Progreso -->
+    <div x-show="procesando" class="mt-6 text-center">
+      <p class="text-sm text-gray-600 mb-2">La IA está leyendo el pedido. Esto puede tardar 10-20 segundos...</p>
+      <div class="w-full bg-gray-200 rounded-full h-2 max-w-md mx-auto overflow-hidden">
+        <div class="bg-keiros-green h-2 rounded-full animate-pulse" style="width: 70%"></div>
+      </div>
+    </div>
+
+    <!-- Error -->
+    <div x-show="error" class="mt-6 p-4 bg-red-50 border border-red-200 rounded-lg">
+      <p class="text-sm font-semibold text-red-800">Error procesando el PDF</p>
+      <p class="text-sm text-red-600 mt-1" x-text="error"></p>
+      <button @click="error = null" class="text-xs text-red-700 underline mt-2">Reintentar</button>
+    </div>
+
+    <div class="mt-6 p-4 bg-keiros-green-soft rounded-lg">
+      <p class="text-xs text-keiros-gray-dark">
+        <strong>💡 Consejo:</strong> El PDF del cliente puede estar en cualquier formato (carta, oficio, escaneado con OCR).
+        La IA solo extrae producto y cantidad — <strong>nunca decide precios</strong>.
+        Los precios se calculan después con tu catálogo oficial.
+      </p>
+    </div>
+  </div>
+
+  <!-- PASO 2: REVISAR ITEMS EXTRAÍDOS -->
+  <div x-show="paso === 'revisar'" style="display:none;">
+
+    <div class="card mb-6">
+      <div class="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <p class="text-sm text-gray-600">Items detectados por IA</p>
+          <p class="text-2xl font-bold text-keiros-gray-dark">
+            <span x-text="resultado.total_items_detectados"></span> items
+          </p>
+        </div>
+        <div class="flex gap-4 text-sm">
+          <div>
+            <p class="text-gray-500">Sin ambigüedad</p>
+            <p class="font-bold text-green-700" x-text="resultado.total_items_sin_ambiguedad"></p>
+          </div>
+          <div>
+            <p class="text-gray-500">Requieren revisión</p>
+            <p class="font-bold text-orange-600" x-text="resultado.total_items_detectados - resultado.total_items_sin_ambiguedad"></p>
+          </div>
+        </div>
+        <button @click="reiniciar()" class="btn btn-secondary text-sm">
+          ← Subir otro PDF
+        </button>
+      </div>
+    </div>
+
+    <!-- Datos del cliente -->
+    <div class="card mb-6">
+      <h2 class="text-lg font-bold mb-4">Datos del cliente</h2>
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div>
+          <label class="label">Nombre del cliente *</label>
+          <input type="text" class="input" x-model="cliente.nombre_cliente" placeholder="Ej: Juan Pérez">
+        </div>
+        <div>
+          <label class="label">Empresa</label>
+          <input type="text" class="input" x-model="cliente.empresa_cliente" placeholder="Empresa">
+        </div>
+        <div>
+          <label class="label">Teléfono</label>
+          <input type="tel" class="input" x-model="cliente.telefono_cliente" placeholder="Teléfono">
+        </div>
+      </div>
+    </div>
+
+    <!-- Lista de items para revisar -->
+    <div class="card mb-6">
+      <h2 class="text-lg font-bold mb-4">Revisar y confirmar items</h2>
+
+      <div class="space-y-3">
+        <template x-for="(item, idx) in items" :key="idx">
+          <div class="border rounded-lg p-4"
+               :class="item.requiere_revision && !item.confirmado ? 'border-orange-300 bg-orange-50' : 'border-gray-200'">
+
+            <!-- Texto original -->
+            <div class="mb-3">
+              <p class="text-xs text-gray-500 uppercase font-semibold mb-1">Texto extraído del PDF</p>
+              <p class="text-sm text-gray-700 italic">"<span x-text="item.texto_original"></span>"</p>
+            </div>
+
+            <!-- Alerta de revisión -->
+            <div x-show="item.requiere_revision && !item.confirmado" class="mb-3 p-2 bg-orange-100 rounded text-xs text-orange-800">
+              ⚠️ <span x-text="item.motivo_revision"></span>
+            </div>
+
+            <!-- Selección de producto -->
+            <div class="grid grid-cols-1 sm:grid-cols-12 gap-3">
+
+              <!-- Producto match -->
+              <div class="sm:col-span-6">
+                <label class="label">Producto del catálogo</label>
+
+                <!-- Si hay match único y no hay alternativas, mostrar el sugerido -->
+                <div x-show="!item.coincidencias_alternativas || item.coincidencias_alternativas.length === 0">
+                  <p x-show="item.referencia_sugerida" class="text-sm font-semibold text-keiros-gray-dark p-2 bg-keiros-green-soft rounded">
+                    <span x-text="item.referencia_sugerida"></span> — <span x-text="item.descripcion_sugerida"></span>
+                  </p>
+                  <p x-show="!item.referencia_sugerida" class="text-sm text-gray-500 p-2 bg-gray-100 rounded">
+                    ❌ No se encontró producto
+                  </p>
+                </div>
+
+                <!-- Si hay múltiples, mostrar select -->
+                <select x-show="item.coincidencias_alternativas && item.coincidencias_alternativas.length > 0"
+                        class="input text-sm"
+                        x-model="item.referencia_seleccionada"
+                        @change="actualizarSeleccion(item)">
+                  <option value="">— Elegir producto —</option>
+                  <template x-for="alt in item.coincidencias_alternativas" :key="alt.referencia">
+                    <option :value="alt.referencia" x-text="`${alt.referencia} — ${alt.descripcion} ($${alt.precio_unitario})`"></option>
+                  </template>
+                </select>
+
+                <!-- Buscador manual como fallback -->
+                <button @click="buscarManual(item)"
+                        class="text-xs text-keiros-gray hover:text-keiros-green-dark underline mt-1">
+                  🔍 Buscar manualmente en el catálogo
+                </button>
+              </div>
+
+              <!-- Cantidad -->
+              <div class="sm:col-span-3">
+                <label class="label">Cantidad *</label>
+                <input type="number" min="1" class="input" x-model.number="item.cantidad"
+                       :class="!item.cantidad ? 'border-red-300' : ''">
+              </div>
+
+              <!-- Estado -->
+              <div class="sm:col-span-3 flex items-end justify-end">
+                <button @click="toggleConfirmar(item)"
+                        class="btn text-xs"
+                        :class="item.confirmado ? 'btn-primary' : 'btn-secondary'">
+                  <span x-text="item.confirmado ? '✓ Confirmado' : 'Confirmar'"></span>
+                </button>
+              </div>
+
+            </div>
+
+            <!-- Eliminar item -->
+            <button @click="items.splice(idx, 1)" class="text-xs text-red-500 hover:text-red-700 mt-3">
+              🗑️ Eliminar este item
+            </button>
+
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- Botones finales -->
+    <div class="card">
+      <div class="flex flex-col sm:flex-row gap-3 justify-between items-center">
+        <p class="text-sm text-gray-600">
+          <strong x-text="itemsConfirmados.length"></strong> de
+          <strong x-text="items.length"></strong> items listos para cotizar
+        </p>
+        <div class="flex gap-3">
+          <button @click="reiniciar()" class="btn btn-secondary">Cancelar</button>
+          <button @click="generarCotizacion()"
+                  :disabled="itemsConfirmados.length === 0 || !cliente.nombre_cliente || enviando"
+                  class="btn btn-primary">
+            <span x-text="enviando ? 'Generando...' : 'Generar cotización con items confirmados'"></span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- PASO 3: RESULTADO -->
+  <div x-show="paso === 'resultado'" style="display:none;" class="card text-center py-12">
+    <svg class="mx-auto mb-4 text-keiros-green" xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+      <polyline points="22 4 12 14.01 9 11.01"/>
+    </svg>
+    <h2 class="text-2xl font-bold text-keiros-gray-dark mb-2">¡Cotización generada!</h2>
+    <p class="text-gray-600 mb-1">Número: <strong x-text="numeroGenerado"></strong></p>
+    <p class="text-sm text-gray-500 mb-6">Se ha abierto el PDF en una nueva pestaña</p>
+    <div class="flex gap-3 justify-center">
+      <a :href="'/api/v1/cotizaciones/' + numeroGenerado + '/pdf'" target="_blank" class="btn btn-secondary">
+        Abrir PDF de nuevo
+      </a>
+      <button @click="reiniciar()" class="btn btn-primary">
+        Leer otro PDF
+      </button>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/api.js"></script>
+<script>
+function lectorPdfApp() {
+  return {
+    paso: 'subir',
+    arrastrando: false,
+    procesando: false,
+    error: null,
+    enviando: false,
+    numeroGenerado: '',
+
+    resultado: {
+      items: [],
+      total_items_detectados: 0,
+      total_items_sin_ambiguedad: 0,
+    },
+
+    items: [],
+
+    cliente: {
+      nombre_cliente: '',
+      empresa_cliente: '',
+      telefono_cliente: '',
+      ciudad_entrega: '',
+      creado_por: '',
+      validez_dias: 15,
+    },
+
+    async init() {
+      const asesor = localStorage.getItem('asesor_nombre');
+      if (asesor) this.cliente.creado_por = asesor;
+    },
+
+    soltar(event) {
+      this.arrastrando = false;
+      const file = event.dataTransfer.files[0];
+      if (file) this.enviarArchivo(file);
+    },
+
+    subirArchivo(event) {
+      const file = event.target.files[0];
+      if (file) this.enviarArchivo(file);
+    },
+
+    async enviarArchivo(file) {
+      if (!file.name.toLowerCase().endsWith('.pdf')) {
+        this.error = 'El archivo debe ser un PDF';
+        return;
+      }
+
+      this.procesando = true;
+      this.error = null;
+
+      try {
+        const formData = new FormData();
+        formData.append('archivo', file);
+
+        const resp = await API.post('/interpretar-pdf-pedido', formData);
+
+        this.resultado = resp;
+        this.items = resp.items.map(it => ({
+          ...it,
+          cantidad: it.cantidad || 1,
+          referencia_seleccionada: it.referencia_sugerida || '',
+          confirmado: !it.requiere_revision && it.referencia_sugerida ? true : false,
+        }));
+
+        this.paso = 'revisar';
+        toast(`Se detectaron ${resp.total_items_detectados} items`);
+      } catch (err) {
+        this.error = err.message;
+      } finally {
+        this.procesando = false;
+      }
+    },
+
+    toggleConfirmar(item) {
+      item.confirmado = !item.confirmado;
+    },
+
+    actualizarSeleccion(item) {
+      const alt = (item.coincidencias_alternativas || []).find(a => a.referencia === item.referencia_seleccionada);
+      if (alt) {
+        item.referencia_sugerida = alt.referencia;
+        item.descripcion_sugerida = alt.descripcion;
+        item.precio_referencia = alt.precio_unitario;
+      }
+    },
+
+    buscarManual(item) {
+      // Abrir prompt simple (mejora futura: modal con buscador)
+      const ref = prompt('Ingresa la referencia del producto:');
+      if (ref) {
+        item.referencia_seleccionada = ref;
+        item.referencia_sugerida = ref;
+        item.descripcion_sugerida = '(manual)';
+      }
+    },
+
+    get itemsConfirmados() {
+      return this.items.filter(i => i.confirmado && i.referencia_sugerida && i.cantidad > 0);
+    },
+
+    async generarCotizacion() {
+      if (!this.cliente.nombre_cliente) {
+        toast('Ingresa el nombre del cliente', 'error');
+        return;
+      }
+      if (this.itemsConfirmados.length === 0) {
+        toast('Confirma al menos un item', 'error');
+        return;
+      }
+
+      if (this.cliente.creado_por) {
+        localStorage.setItem('asesor_nombre', this.cliente.creado_por);
+      }
+
+      this.enviando = true;
+      try {
+        const payload = {
+          nombre_cliente: this.cliente.nombre_cliente,
+          empresa_cliente: this.cliente.empresa_cliente || null,
+          telefono_cliente: this.cliente.telefono_cliente || null,
+          ciudad_entrega: this.cliente.ciudad_entrega || null,
+          creado_por: this.cliente.creado_por || null,
+          validez_dias: this.cliente.validez_dias || 15,
+          items: this.itemsConfirmados.map(i => ({
+            referencia: i.referencia_sugerida,
+            cantidad: i.cantidad,
+          })),
+        };
+
+        const resp = await API.post('/cotizar', payload);
+        this.numeroGenerado = resp.numero;
+        this.paso = 'resultado';
+        window.open(resp.pdf_url, '_blank');
+        toast('¡Cotización ' + resp.numero + ' generada!');
+      } catch (err) {
+        toast('Error: ' + err.message, 'error');
+      } finally {
+        this.enviando = false;
+      }
+    },
+
+    reiniciar() {
+      this.paso = 'subir';
+      this.items = [];
+      this.resultado = { items: [], total_items_detectados: 0, total_items_sin_ambiguedad: 0 };
+      this.error = null;
+      this.numeroGenerado = '';
+      this.cliente.nombre_cliente = '';
+      this.cliente.empresa_cliente = '';
+      this.cliente.telefono_cliente = '';
+      this.cliente.ciudad_entrega = '';
+    },
+  };
+}
+</script>
+{% endblock %}

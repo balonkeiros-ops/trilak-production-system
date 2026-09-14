@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% block title %}Historial · Trilak{% endblock %}
+
+{% block content %}
+<div x-data="historialApp()" x-init="init()" class="fade-in">
+
+  <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
+    <div>
+      <h1 class="text-2xl sm:text-3xl font-bold text-keiros-gray-dark">Historial de Cotizaciones</h1>
+      <p class="text-sm text-gray-500 mt-1">Consulta todas las cotizaciones que has generado</p>
+    </div>
+    <a href="/nueva-cotizacion" class="btn btn-primary self-start sm:self-auto">
+      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+      </svg>
+      Nueva Cotización
+    </a>
+  </div>
+
+  <!-- Filtros -->
+  <div class="card mb-6">
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div>
+        <label class="label">Buscar cliente</label>
+        <input type="text" class="input" x-model="filtro.texto" placeholder="Nombre o empresa...">
+      </div>
+      <div>
+        <label class="label">Desde</label>
+        <input type="date" class="input" x-model="filtro.desde">
+      </div>
+      <div>
+        <label class="label">Hasta</label>
+        <input type="date" class="input" x-model="filtro.hasta">
+      </div>
+    </div>
+    <div class="flex gap-2 mt-4">
+      <button @click="limpiarFiltros()" class="btn btn-secondary text-sm">Limpiar filtros</button>
+      <span class="text-sm text-gray-500 self-center" x-text="`Mostrando ${cotizacionesFiltradas.length} de ${cotizaciones.length}`"></span>
+    </div>
+  </div>
+
+  <!-- Cargando -->
+  <div x-show="cargando" class="card py-12 text-center text-gray-400">
+    <svg class="spin inline-block" xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+    </svg>
+    <p class="mt-3">Cargando historial...</p>
+  </div>
+
+  <!-- Sin resultados -->
+  <div x-show="!cargando && cotizacionesFiltradas.length === 0" class="card py-12 text-center text-gray-400">
+    <svg class="mx-auto mb-3" xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+      <path d="M3 3h18v18H3z"/><path d="M3 9h18M3 15h18M9 3v18"/>
+    </svg>
+    <p class="text-lg font-semibold">No hay cotizaciones</p>
+    <p class="text-sm mt-1">
+      <span x-show="cotizaciones.length === 0">Aún no has generado ninguna cotización.</span>
+      <span x-show="cotizaciones.length > 0">Ninguna coincide con los filtros aplicados.</span>
+    </p>
+  </div>
+
+  <!-- Tabla -->
+  <div x-show="!cargando && cotizacionesFiltradas.length > 0" class="card">
+    <div class="overflow-x-auto">
+      <table class="table-keiros">
+        <thead>
+          <tr>
+            <th>Número</th>
+            <th>Cliente</th>
+            <th class="hidden md:table-cell">Empresa</th>
+            <th class="hidden sm:table-cell">Expedición</th>
+            <th class="hidden lg:table-cell">Expira</th>
+            <th class="text-right">Total</th>
+            <th class="w-24"></th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-for="c in cotizacionesFiltradas" :key="c.numero">
+            <tr>
+              <td class="font-mono text-xs font-semibold" x-text="c.numero"></td>
+              <td>
+                <p class="font-semibold" x-text="c.nombre_cliente || '—'"></p>
+              </td>
+              <td class="hidden md:table-cell text-sm text-gray-600" x-text="c.empresa_cliente || '—'"></td>
+              <td class="hidden sm:table-cell text-sm" x-text="formatFecha(c.fecha_expedicion)"></td>
+              <td class="hidden lg:table-cell text-sm">
+                <span :class="estaVencida(c.fecha_expiracion) ? 'badge badge-red' : 'badge badge-green'"
+                      x-text="formatFecha(c.fecha_expiracion)"></span>
+              </td>
+              <td class="text-right font-semibold" x-text="formatCOP(c.total)"></td>
+              <td class="text-right">
+                <a :href="'/api/v1/cotizaciones/' + c.numero + '/pdf'" target="_blank"
+                   class="text-keiros-gray hover:text-keiros-green-dark font-medium text-sm whitespace-nowrap">
+                  Ver PDF →
+                </a>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/api.js"></script>
+<script>
+function historialApp() {
+  return {
+    cotizaciones: [],
+    cargando: true,
+    filtro: {
+      texto: '',
+      desde: '',
+      hasta: '',
+    },
+
+    async init() {
+      try {
+        this.cotizaciones = await API.get('/cotizaciones?limite=200');
+      } catch (err) {
+        toast('Error cargando historial: ' + err.message, 'error');
+      } finally {
+        this.cargando = false;
+      }
+    },
+
+    get cotizacionesFiltradas() {
+      return this.cotizaciones.filter(c => {
+        if (this.filtro.texto) {
+          const q = this.filtro.texto.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+          const texto = ((c.nombre_cliente || '') + ' ' + (c.empresa_cliente || '') + ' ' + (c.numero || ''))
+            .toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+          if (!texto.includes(q)) return false;
+        }
+        if (this.filtro.desde) {
+          const fecha = (c.fecha_expedicion || '').slice(0, 10);
+          if (fecha < this.filtro.desde) return false;
+        }
+        if (this.filtro.hasta) {
+          const fecha = (c.fecha_expedicion || '').slice(0, 10);
+          if (fecha > this.filtro.hasta) return false;
+        }
+        return true;
+      });
+    },
+
+    estaVencida(fechaISO) {
+      if (!fechaISO) return false;
+      return new Date(fechaISO) < new Date();
+    },
+
+    limpiarFiltros() {
+      this.filtro = { texto: '', desde: '', hasta: '' };
+    },
+
+    formatCOP,
+    formatFecha,
+  };
+}
+</script>
+{% endblock %}

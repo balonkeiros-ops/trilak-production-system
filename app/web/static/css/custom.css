@@ -1,0 +1,62 @@
+/* ==========================================================================
+   TRILAK SPORT / KEIROS - Estilos personalizados
+   Verde: #5ee045 · Gris: #4d4d4d
+   ========================================================================== */
+
+:root {
+  --keiros-green: #5ee045;
+  --keiros-green-dark: #4bb838;
+  --keiros-green-soft: #e8fce2;
+  --keiros-gray: #4d4d4d;
+  --keiros-gray-dark: #333333;
+}
+
+body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; -webkit-font-smoothing: antialiased; }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: #f1f1f1; }
+::-webkit-scrollbar-thumb { background: #c0c0c0; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--keiros-gray); }
+
+/* Botones */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem; padding: 0.625rem 1.125rem; border-radius: 0.5rem; font-weight: 600; font-size: 0.9rem; cursor: pointer; border: none; transition: all 0.15s ease; text-decoration: none; white-space: nowrap; }
+.btn-primary { background-color: var(--keiros-green); color: var(--keiros-gray-dark); }
+.btn-primary:hover { background-color: var(--keiros-green-dark); box-shadow: 0 4px 12px rgba(94, 224, 69, 0.3); transform: translateY(-1px); }
+.btn-secondary { background-color: #fff; color: var(--keiros-gray); border: 1px solid #d1d5db; }
+.btn-secondary:hover { background-color: #f9fafb; border-color: #9ca3af; }
+.btn-danger { background-color: #ef4444; color: #fff; }
+.btn-danger:hover { background-color: #dc2626; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none !important; }
+
+/* Cards */
+.card { background-color: #fff; border-radius: 0.75rem; border: 1px solid #e5e7eb; padding: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+.card-hover:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.08); transform: translateY(-2px); transition: all 0.2s ease; }
+
+/* Inputs */
+.input { width: 100%; padding: 0.625rem 0.875rem; border-radius: 0.5rem; border: 1px solid #d1d5db; font-size: 0.9rem; color: var(--keiros-gray-dark); transition: all 0.15s; background-color: #fff; }
+.input:focus { outline: none; border-color: var(--keiros-green); box-shadow: 0 0 0 3px rgba(94, 224, 69, 0.2); }
+.label { display: block; font-size: 0.8rem; font-weight: 600; color: var(--keiros-gray); margin-bottom: 0.375rem; text-transform: uppercase; letter-spacing: 0.03em; }
+
+/* Tablas */
+.table-keiros { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+.table-keiros thead { background-color: var(--keiros-gray); color: #fff; }
+.table-keiros th { padding: 0.75rem 1rem; text-align: left; font-weight: 600; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.03em; }
+.table-keiros td { padding: 0.75rem 1rem; border-bottom: 1px solid #f0f0f0; color: var(--keiros-gray-dark); }
+.table-keiros tbody tr:hover { background-color: var(--keiros-green-soft); }
+
+/* Sidebar */
+.nav-item { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 1rem; border-radius: 0.5rem; color: #d1d5db; font-weight: 500; font-size: 0.95rem; text-decoration: none; transition: all 0.15s; margin-bottom: 0.25rem; }
+.nav-item:hover { background-color: rgba(255,255,255,0.08); color: #fff; }
+.nav-item.active { background-color: var(--keiros-green); color: var(--keiros-gray-dark); font-weight: 600; }
+
+/* Badges */
+.badge { display: inline-flex; align-items: center; padding: 0.2rem 0.6rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; }
+.badge-green { background-color: var(--keiros-green-soft); color: #2d7a1a; }
+.badge-gray { background-color: #f3f4f6; color: #4b5563; }
+.badge-red { background-color: #fee2e2; color: #991b1b; }
+
+/* Animaciones */
+.fade-in { animation: fadeIn 0.3s ease-out; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+.spin { animation: spin 1s linear infinite; }
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
