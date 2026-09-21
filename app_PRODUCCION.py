@@ -16,27 +16,24 @@ from functools import wraps
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Carga las variables del archivo .env (DATABASE_URL, SECRET_KEY, etc.) cuando
-# se corre localmente. En Render esto no rompe nada: no hay archivo .env ahí,
-# load_dotenv() simplemente no encuentra nada y sigue de largo sin error —
-# Render inyecta las variables de entorno directamente desde su panel.
 load_dotenv()
 
-# Render corre sus servidores en UTC, no en la hora de Colombia. Sin esto,
-# datetime.now() usa la hora del servidor -> los números de pedido y fechas
-# de producción quedan "adelantados" varias horas respecto a lo que el
-# operario ve en su reloj, y hasta pueden saltar al día siguiente de noche
-# (ej. a las 7pm en Colombia ya es medianoche en UTC).
 COLOMBIA_TZ = timezone(timedelta(hours=-5))
 
 
 def ahora_colombia():
-    """Fecha y hora actual en horario de Colombia (UTC-5), sin importar
-    en qué zona horaria esté corriendo el servidor (Render usa UTC)."""
     return datetime.now(COLOMBIA_TZ).replace(tzinfo=None)
 
 app = Flask(__name__, static_folder='build/static', static_url_path='/static')
 app.secret_key = os.environ.get('SECRET_KEY', 'trilak-dev-secret-cambiar-en-render')
+
+# Configuración de sesión: cookie HttpOnly, SameSite=Lax (funciona en el
+# mismo dominio, evita ataques CSRF simples). Con esto la cookie de sesión
+# se manda automáticamente en cada fetch desde el frontend.
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SECURE'] = os.environ.get('FLASK_ENV') == 'production'
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=30)
 
 _database_url = os.environ.get('DATABASE_URL', '').strip()
 if not _database_url:
@@ -47,20 +44,13 @@ app.config['SQLALCHEMY_DATABASE_URI'] = _database_url
 print(f"[DB] Usando: {_database_url.split('://')[0]}://... (longitud={len(_database_url)})")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JSON_SORT_KEYS'] = False
-# Supabase (y los servicios de Postgres administrado en general) cierran
-# conexiones inactivas periódicamente. Sin esto, SQLAlchemy a veces intenta
-# reutilizar una conexión ya cerrada y falla con
-# "server closed the connection unexpectedly". pool_pre_ping hace un chequeo
-# rápido antes de reutilizar una conexión (y la reemplaza si está muerta);
-# pool_recycle fuerza renovar conexiones cada 5 minutos, antes de que
-# Supabase las cierre por su cuenta.
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     'pool_pre_ping': True,
     'pool_recycle': 300,
 }
 
 db = SQLAlchemy(app)
-CORS(app)
+CORS(app, supports_credentials=True)
 
 INVENTARIO_DB_PATH = os.path.join(
     os.path.dirname(__file__),
@@ -117,11 +107,6 @@ class Usuario(db.Model):
 
 
 class PinOperario(db.Model):
-    """
-    PIN de 4 dígitos que firma el inicio/fin de tareas de producción.
-    Se calcula desde los últimos 4 dígitos de la cédula del operario.
-    El PIN se guarda siempre hasheado; nunca en claro en la base de datos.
-    """
     __tablename__ = 'pin_operario'
     id = db.Column(db.Integer, primary_key=True)
     operario_id = db.Column(db.Integer, db.ForeignKey('operario.id'),
@@ -134,10 +119,6 @@ class PinOperario(db.Model):
 
 
 class Auditoria(db.Model):
-    """
-    Registro de acciones sensibles: logins, validaciones de PIN (éxito y
-    fallo), creación/edición/eliminación de entidades críticas.
-    """
     __tablename__ = 'auditoria'
     id = db.Column(db.Integer, primary_key=True)
     usuario_id = db.Column(db.Integer, db.ForeignKey('usuario.id'), nullable=True)
@@ -284,8 +265,8 @@ class Produccion(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     operario_id = db.Column(db.Integer, db.ForeignKey('operario.id'), nullable=False)
     tarea_id = db.Column(db.Integer, db.ForeignKey('tarea.id'), nullable=False)
-    tipo_balon_id = db.Column(db.Integer, db.ForeignKey('tipo_balon.id'), nullable=False) # Obligatorio
-    complejidad_estilo = db.Column(db.String(50), default='32 cascos') # NUEVO: '32 cascos' o '4 piezas'
+    tipo_balon_id = db.Column(db.Integer, db.ForeignKey('tipo_balon.id'), nullable=False)
+    complejidad_estilo = db.Column(db.String(50), default='32 cascos')
     pedido_id = db.Column(db.Integer, db.ForeignKey('pedido.id'), nullable=True)
     cantidad = db.Column(db.Float, default=1)
     unidades_buenas = db.Column(db.Float, default=0)
@@ -338,11 +319,6 @@ def generar_numero_pedido():
 # ======================== UTILIDADES DE AUTH ========================
 
 def calcular_pin_desde_cedula(cedula):
-    """
-    Devuelve los últimos 4 dígitos de la cédula como STRING.
-    Mantiene ceros iniciales ('0243' no se convierte en 243).
-    Devuelve None si la cédula no tiene al menos 4 dígitos.
-    """
     if not cedula:
         return None
     solo_digitos = ''.join(c for c in str(cedula) if c.isdigit())
@@ -352,12 +328,10 @@ def calcular_pin_desde_cedula(cedula):
 
 
 def hashear_pin(pin):
-    """Hashea un PIN. Se guarda el hash, nunca el PIN en claro."""
     return generate_password_hash(str(pin))
 
 
 def verificar_pin(pin, pin_hash):
-    """Verifica un PIN contra su hash. Devuelve True/False."""
     try:
         return check_password_hash(pin_hash, str(pin))
     except Exception:
@@ -366,10 +340,6 @@ def verificar_pin(pin, pin_hash):
 
 def registrar_auditoria(accion, entidad=None, entidad_id=None, detalle=None,
                         exito=True, usuario_id=None, operario_id=None):
-    """
-    Helper para insertar filas en la tabla de auditoría.
-    Captura IP y User-Agent del request actual si hay uno activo.
-    """
     try:
         from flask import request, has_request_context
         ip = None
@@ -392,9 +362,16 @@ def registrar_auditoria(accion, entidad=None, entidad_id=None, detalle=None,
         ))
         db.session.commit()
     except Exception as e:
-        # La auditoría nunca debe romper una operación exitosa del negocio.
         db.session.rollback()
         print(f"[AUDITORIA] No se pudo registrar {accion}: {e}")
+
+
+def usuario_actual():
+    """Devuelve el objeto Usuario de la sesión o None."""
+    uid = session.get('usuario_id')
+    if not uid:
+        return None
+    return db.session.get(Usuario, uid)
 
 
 # ======================== FUNCIONES DE INVENTARIO ========================
@@ -515,13 +492,6 @@ def cargar_materiales_sgii():
 
 
 def crear_usuarios_y_pins_iniciales():
-    """
-    Idempotente: se ejecuta en cada arranque, solo crea lo que no existe.
-    No actualiza PINs existentes (para no borrar cambios manuales).
-    """
-    # ── Usuarios del sistema ─────────────────────────────────────────
-    # IMPORTANTE: cambia estas contraseñas después del primer login.
-    # No las dejes así en producción mucho tiempo.
     usuarios_iniciales = [
         ('aldo',   'Trilak2026*Aldo',   'admin'),
         ('miguel', 'Trilak2026*Miguel', 'gerente'),
@@ -538,7 +508,6 @@ def crear_usuarios_y_pins_iniciales():
             print(f"[INIT] Usuario creado: {username} ({rol})")
     db.session.commit()
 
-    # ── Cédulas de los 13 operarios activos ──────────────────────────
     operarios_cedulas = [
         ('YEFERSON CAMILO ARDILA VIVIESCAS',     '1025141964'),
         ('ANYI JAIDYD AMAYA AMAYA',              '1032380243'),
@@ -558,7 +527,6 @@ def crear_usuarios_y_pins_iniciales():
     for nombre, cedula in operarios_cedulas:
         op = Operario.query.filter_by(nombre=nombre).first()
         if not op:
-            # No existía, lo creamos (por si inicializar_datos aún no corrió)
             op = Operario(nombre=nombre, cedula=cedula, estado='disponible')
             db.session.add(op)
             db.session.flush()
@@ -566,7 +534,6 @@ def crear_usuarios_y_pins_iniciales():
         elif not op.cedula:
             op.cedula = cedula
 
-        # Generar PIN si no existe
         if not PinOperario.query.filter_by(operario_id=op.id).first():
             pin = calcular_pin_desde_cedula(cedula)
             if pin:
@@ -577,7 +544,6 @@ def crear_usuarios_y_pins_iniciales():
                 ))
                 print(f"[INIT] PIN generado para {nombre}")
 
-    # ── Marcar inactivos a quienes ya no trabajan ────────────────────
     for nombre in ['MICHAEL ANDRES GUZMAN ROBLES',
                    'TATIANA HERNANDEZ OSPINA',
                    'OTRO OPERARIO']:
@@ -589,33 +555,119 @@ def crear_usuarios_y_pins_iniciales():
     db.session.commit()
 
 
-@app.route('/api/login', methods=['POST'])
-def login():
-    data = request.json
-    if data.get('usuario') == 'admin' and data.get('contrasena') == 'trilak2026':
-        session['logged_in'] = True
-        return jsonify({'ok': True})
-    return jsonify({'ok': False}), 401
-
-
-@app.route('/api/logout', methods=['POST'])
-def logout():
-    session.pop('logged_in', None)
-    return jsonify({'ok': True})
-
+# ======================== DECORADORES DE AUTH ========================
 
 def login_required(f):
+    """Exige sesión activa. La sesión se crea al hacer POST /api/login."""
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if not session.get('logged_in'):
+        if not session.get('usuario_id'):
             return jsonify({'error': 'No autorizado'}), 401
         return f(*args, **kwargs)
     return decorated_function
 
 
+def rol_requerido(*roles_permitidos):
+    """
+    Exige que el usuario logueado tenga uno de los roles indicados.
+    Uso: @rol_requerido('admin') o @rol_requerido('admin', 'gerente')
+    """
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            rol_actual = session.get('rol')
+            if not rol_actual:
+                return jsonify({'error': 'No autorizado'}), 401
+            if rol_actual not in roles_permitidos:
+                return jsonify({'error': 'Sin permiso para esta acción'}), 403
+            return f(*args, **kwargs)
+        return decorated_function
+    return decorator
+
+
+# ======================== LOGIN / LOGOUT ========================
+
+@app.route('/api/login', methods=['POST'])
+def login():
+    data = request.json or {}
+    username = (data.get('usuario') or '').strip().lower()
+    password = data.get('contrasena') or ''
+
+    if not username or not password:
+        return jsonify({'error': 'Usuario y contraseña son obligatorios'}), 400
+
+    usuario = Usuario.query.filter_by(username=username).first()
+
+    if not usuario or not usuario.activo:
+        registrar_auditoria(
+            accion='login_fallido',
+            detalle=f'Usuario no existe o inactivo: {username}',
+            exito=False
+        )
+        return jsonify({'error': 'Usuario o contraseña incorrectos'}), 401
+
+    if not check_password_hash(usuario.password_hash, password):
+        registrar_auditoria(
+            accion='login_fallido',
+            detalle=f'Contraseña incorrecta para: {username}',
+            exito=False,
+            usuario_id=usuario.id
+        )
+        return jsonify({'error': 'Usuario o contraseña incorrectos'}), 401
+
+    # Login exitoso
+    session.permanent = True
+    session['usuario_id'] = usuario.id
+    session['username'] = usuario.username
+    session['rol'] = usuario.rol
+
+    usuario.ultimo_login = ahora_colombia()
+    db.session.commit()
+
+    registrar_auditoria(
+        accion='login_exitoso',
+        entidad='usuario',
+        entidad_id=usuario.id,
+        detalle=f'{usuario.username} ({usuario.rol})',
+        usuario_id=usuario.id
+    )
+
+    return jsonify({
+        'ok': True,
+        'usuario': usuario.to_dict()
+    })
+
+
+@app.route('/api/logout', methods=['POST'])
+def logout():
+    uid = session.get('usuario_id')
+    username = session.get('username')
+    if uid:
+        registrar_auditoria(
+            accion='logout',
+            entidad='usuario',
+            entidad_id=uid,
+            detalle=f'{username} cerró sesión',
+            usuario_id=uid
+        )
+    session.clear()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/me', methods=['GET'])
+def me():
+    """Devuelve el usuario logueado actual. El frontend lo usa al arrancar
+    para saber quién es sin tener que re-loguearse."""
+    u = usuario_actual()
+    if not u:
+        return jsonify({'error': 'No autorizado'}), 401
+    return jsonify(u.to_dict())
+
+
 # ======================== RUTAS API ========================
 
 @app.route('/api/tipos-balon', methods=['GET'])
+@login_required
 def get_tipos_balon():
     tipos = TipoBalon.query.all()
     resultado = []
@@ -634,11 +686,6 @@ def get_tipos_balon():
             Pedido.estado.in_(['pendiente', 'en_proceso'])
         ).scalar()
 
-        # Antes esto pasaba por Produccion.pedido_id -> Pedido -> PedidoBalon,
-        # así que cualquier registro de producción SIN pedido vinculado (algo
-        # muy común, el pedido es opcional en el formulario) quedaba fuera del
-        # conteo -> por eso casi todas las referencias mostraban Stock: 0.
-        # Produccion.tipo_balon_id es directo y confiable, se usa ese.
         fabricadas = db.session.query(
             db.func.coalesce(db.func.sum(Produccion.unidades_buenas), 0)
         ).filter(Produccion.tipo_balon_id == tipo.id).scalar()
@@ -675,6 +722,8 @@ def get_tipos_balon():
 
 @app.route('/api/inicializar', methods=['POST'])
 def inicializar_bd():
+    """Público: el frontend lo llama al arrancar para asegurar que las
+    tablas existan. No expone datos sensibles."""
     db.create_all()
     inicializar_datos()
     cargar_materiales_sgii()
@@ -682,6 +731,7 @@ def inicializar_bd():
 
 
 @app.route('/api/tipos-balon/<int:tipo_id>/metricas', methods=['GET'])
+@login_required
 def get_metricas_tipo_balon(tipo_id):
     tipo_balon = TipoBalon.query.get_or_404(tipo_id)
     entregadas = db.session.query(
@@ -696,8 +746,6 @@ def get_metricas_tipo_balon(tipo_id):
         PedidoBalon.tipo_balon_id == tipo_id,
         Pedido.estado.in_(['pendiente', 'en_proceso'])
     ).scalar()
-    # Igual que en el listado: Produccion.tipo_balon_id es directo y confiable,
-    # no depende de que el registro tenga un pedido vinculado.
     fabricadas = db.session.query(
         db.func.coalesce(db.func.sum(Produccion.unidades_buenas), 0)
     ).filter(Produccion.tipo_balon_id == tipo_id).scalar()
@@ -714,8 +762,6 @@ def get_metricas_tipo_balon(tipo_id):
     elif stock_actual == 0 and pendientes == 0:
         semaforo = 'rojo'
 
-    # Trazabilidad de lotes: últimos registros de producción de esta
-    # referencia, para la tabla que el frontend pinta en el detalle.
     registros = Produccion.query.filter_by(tipo_balon_id=tipo_id) \
         .order_by(Produccion.fecha.desc()).limit(50).all()
     lotes = [{
@@ -753,10 +799,14 @@ def serve(path):
 # ── OPERARIOS ─────────────────────────────────────────────────────────────────
 
 @app.route('/api/operarios', methods=['GET', 'POST'])
+@login_required
 def operarios_route():
     if request.method == 'GET':
         ops = Operario.query.order_by(Operario.nombre).all()
         return jsonify([op.to_dict() for op in ops])
+    # POST solo admin
+    if session.get('rol') != 'admin':
+        return jsonify({'error': 'Sin permiso para crear operarios'}), 403
     data = request.json
     if not data.get('nombre'):
         return jsonify({'error': 'El nombre es obligatorio'}), 400
@@ -767,6 +817,7 @@ def operarios_route():
 
 
 @app.route('/api/operarios/<int:operario_id>', methods=['PATCH'])
+@rol_requerido('admin')
 def actualizar_operario(operario_id):
     operario = Operario.query.get_or_404(operario_id)
     data = request.json
@@ -778,9 +829,10 @@ def actualizar_operario(operario_id):
     return jsonify(operario.to_dict())
 
 
-# ── NUEVO: ANALÍTICA INDIVIDUAL (HU-11, HU-12, HU-13) ──────────────────────
+# ── ANALÍTICA INDIVIDUAL ────────────────────────────────────────────────────
 
 @app.route('/api/operarios/<int:operario_id>/analitica', methods=['GET'])
+@login_required
 def analitica_operario(operario_id):
     operario = Operario.query.get_or_404(operario_id)
     filtro = request.args.get('periodo', 'mensual')
@@ -866,6 +918,7 @@ def analitica_operario(operario_id):
 # ── TAREAS ────────────────────────────────────────────────────────────────────
 
 @app.route('/api/tareas', methods=['GET'])
+@login_required
 def get_tareas():
     return jsonify([t.to_dict() for t in Tarea.query.order_by(Tarea.nombre).all()])
 
@@ -873,6 +926,7 @@ def get_tareas():
 # ── MATERIALES ────────────────────────────────────────────────────────────────
 
 @app.route('/api/materiales', methods=['GET'])
+@login_required
 def get_materiales():
     materiales = Material.query.order_by(Material.nombre).all()
     resultado = []
@@ -886,6 +940,7 @@ def get_materiales():
 
 
 @app.route('/api/materiales/<int:material_id>/umbral', methods=['PUT'])
+@rol_requerido('admin')
 def actualizar_umbral_material(material_id):
     material = Material.query.get_or_404(material_id)
     data = request.json or {}
@@ -901,6 +956,7 @@ def actualizar_umbral_material(material_id):
 
 
 @app.route('/api/materiales/<int:material_id>/stock', methods=['GET'])
+@login_required
 def get_stock_material(material_id):
     material = Material.query.get_or_404(material_id)
     stock_real = get_stock_inventario(material.nombre)
@@ -913,6 +969,7 @@ def get_stock_material(material_id):
 # ── PEDIDOS ───────────────────────────────────────────────────────────────────
 
 @app.route('/api/pedidos/<int:pedido_id>/imagenes/<int:imagen_id>', methods=['GET'])
+@login_required
 def get_imagen_pedido(pedido_id, imagen_id):
     imagen = PedidoImagen.query.filter_by(id=imagen_id, pedido_id=pedido_id).first_or_404()
     binario = base64.b64decode(imagen.contenido_base64)
@@ -920,6 +977,7 @@ def get_imagen_pedido(pedido_id, imagen_id):
 
 
 @app.route('/api/pedidos', methods=['GET', 'POST'])
+@login_required
 def pedidos_route():
     if request.method == 'GET':
         return jsonify([p.to_dict() for p in Pedido.query.order_by(Pedido.fecha_creacion.desc()).all()])
@@ -986,9 +1044,6 @@ def pedidos_route():
             material.cantidad_disponible = max(0.0, material.cantidad_disponible - cantidad)
 
             stock_proyectado = max(0.0, stock_check - cantidad)
-            # Protección: materiales creados antes de que existiera la columna
-            # umbral_minimo pueden tener el valor en NULL (ver corregir_umbrales_nulos()
-            # más abajo, que normaliza esto en la base de datos al arrancar).
             umbral_minimo_material = material.umbral_minimo if material.umbral_minimo is not None else 50
             if stock_proyectado < umbral_minimo_material:
                 alertas_stock.append({'material_id': material.id, 'material_nombre': material.nombre, 'cantidad_disponible': stock_proyectado, 'umbral_minimo': umbral_minimo_material, 'unidad': material.unidad})
@@ -998,6 +1053,13 @@ def pedidos_route():
                 advertencias.append(f'Inventario SGII: {resultado["mensaje"]}')
 
         db.session.commit()
+        registrar_auditoria(
+            accion='crear_pedido',
+            entidad='pedido',
+            entidad_id=nuevo_pedido.id,
+            detalle=f'Pedido {nuevo_pedido.numero_pedido} - {nuevo_pedido.cliente}',
+            usuario_id=session.get('usuario_id')
+        )
         respuesta = nuevo_pedido.to_dict()
         if advertencias: respuesta['advertencias'] = advertencias
         if alertas_stock: respuesta['alertas_stock'] = alertas_stock
@@ -1009,25 +1071,36 @@ def pedidos_route():
 
 
 @app.route('/api/pedidos/<int:pedido_id>', methods=['GET'])
+@login_required
 def get_pedido(pedido_id):
     return jsonify(Pedido.query.get_or_404(pedido_id).to_dict())
 
 
 @app.route('/api/pedidos/<int:pedido_id>/estado', methods=['PATCH'])
+@login_required
 def actualizar_estado_pedido(pedido_id):
     pedido = Pedido.query.get_or_404(pedido_id)
     estados_validos = ['pendiente', 'en_proceso', 'completado', 'cancelado']
     nuevo_estado = request.json.get('estado')
     if nuevo_estado not in estados_validos:
         return jsonify({'error': f'Estado inválido. Opciones: {estados_validos}'}), 400
+    estado_anterior = pedido.estado
     pedido.estado = nuevo_estado
     db.session.commit()
+    registrar_auditoria(
+        accion='cambiar_estado_pedido',
+        entidad='pedido',
+        entidad_id=pedido.id,
+        detalle=f'{estado_anterior} → {nuevo_estado}',
+        usuario_id=session.get('usuario_id')
+    )
     return jsonify(pedido.to_dict())
 
 
 # ── PRODUCCIÓN ────────────────────────────────────────────────────────────────
 
 @app.route('/api/produccion', methods=['GET', 'POST'])
+@login_required
 def produccion_route():
     if request.method == 'GET':
         return jsonify([r.to_dict() for r in Produccion.query.order_by(Produccion.fecha.desc()).all()])
@@ -1037,7 +1110,7 @@ def produccion_route():
         operario = Operario.query.get(data.get('operario_id'))
         tarea = Tarea.query.get(data.get('tarea_id'))
         tipo_balon = TipoBalon.query.get(data.get('tipo_balon_id'))
-        complejidad_estilo = data.get('complejidad_estilo', '32 cascos') # NUEVO: recibir estilo
+        complejidad_estilo = data.get('complejidad_estilo', '32 cascos')
 
         if not operario: return jsonify({'error': 'Operario no encontrado'}), 400
         if not tarea: return jsonify({'error': 'Tarea no encontrada'}), 400
@@ -1071,7 +1144,7 @@ def produccion_route():
             operario_id=operario.id,
             tarea_id=tarea.id,
             tipo_balon_id=tipo_balon.id,
-            complejidad_estilo=complejidad_estilo, # NUEVO
+            complejidad_estilo=complejidad_estilo,
             pedido_id=data.get('pedido_id') or None,
             cantidad=total_unidades,
             unidades_buenas=unidades_buenas,
@@ -1092,24 +1165,25 @@ def produccion_route():
 
 
 @app.route('/api/produccion/por-operario/<int:operario_id>', methods=['GET'])
+@login_required
 def produccion_por_operario(operario_id):
     registros = Produccion.query.filter_by(operario_id=operario_id).order_by(Produccion.fecha.desc()).all()
     return jsonify([r.to_dict() for r in registros])
 
 
-# ── NUEVO: REPORTES ADMINISTRATIVOS (HU-14) ─────────────────────────────────
+# ── REPORTES ADMINISTRATIVOS ────────────────────────────────────────────────
 
 @app.route('/api/reportes/operarios/<int:operario_id>', methods=['GET'])
+@rol_requerido('admin', 'gerente')
 def reporte_operario(operario_id):
     formato = request.args.get('formato', 'excel')
-    # El frontend debe enviar los datos de analítica en el body de la petición GET
-    analitica = request.get_json() 
+    analitica = request.get_json()
     if not analitica:
         return jsonify({'error': 'Se necesitan los datos de la analítica'}), 400
-    
+
     operario = analitica['operario']
     metricas = analitica['metricas']
-    
+
     if formato == 'excel':
         output = io.BytesIO()
         workbook = xlsxwriter.Workbook(output, {'in_memory': True})
@@ -1130,7 +1204,7 @@ def reporte_operario(operario_id):
         sheet.write('B8', metricas['eficiencia_porcentaje'])
         workbook.close()
         output.seek(0)
-        return send_file(output, mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 
+        return send_file(output, mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                          as_attachment=True, download_name=f'Reporte_{operario["nombre"]}.xlsx')
 
     elif formato == 'pdf':
@@ -1146,38 +1220,38 @@ def reporte_operario(operario_id):
         c.drawString(100, 620, f"Eficiencia Global: {metricas['eficiencia_porcentaje']}%")
         c.save()
         output.seek(0)
-        return send_file(output, mimetype='application/pdf', 
+        return send_file(output, mimetype='application/pdf',
                          as_attachment=True, download_name=f'Reporte_{operario["nombre"]}.pdf')
-    
+
     return jsonify({'error': 'Formato no soportado'}), 400
 
 
-# ── DASHBOARD (CON WIDGET EJECUTIVO HU-15) ──────────────────────────────────
+# ── DASHBOARD ───────────────────────────────────────────────────────────────
 
 @app.route('/api/dashboard', methods=['GET'])
+@login_required
 def dashboard():
     total_buenas = db.session.query(db.func.coalesce(db.func.sum(Produccion.unidades_buenas), 0)).scalar()
     total_defectuosas = db.session.query(db.func.coalesce(db.func.sum(Produccion.unidades_defectuosas), 0)).scalar()
     total_producido = total_buenas + total_defectuosas
     calidad_real = round((total_buenas / total_producido) * 100, 1) if total_producido > 0 else None
 
-    # NUEVO: Cálculo para el Widget Ejecutivo
     top_operarios = db.session.query(
         Produccion.operario_id,
         db.func.sum(Produccion.unidades_buenas + Produccion.unidades_defectuosas).label('total_unidades')
     ).group_by(Produccion.operario_id).order_by(db.text('total_unidades DESC')).limit(5).all()
-    
+
     lista_top = []
     for op_id, total in top_operarios:
         op = Operario.query.get(op_id)
         if op:
             lista_top.append({'nombre': op.nombre, 'total_unidades': total})
-    
+
     top_merma = db.session.query(
         Produccion.operario_id,
         db.func.sum(Produccion.unidades_defectuosas).label('total_defectos')
     ).group_by(Produccion.operario_id).order_by(db.text('total_defectos DESC')).limit(3).all()
-    
+
     lista_merma = []
     for op_id, defectos in top_merma:
         op = Operario.query.get(op_id)
@@ -1200,7 +1274,6 @@ def dashboard():
             'calidad': calidad_real,
             'unidades_buenas_total': total_buenas,
             'unidades_defectuosas_total': total_defectuosas,
-            # NUEVO: Datos para el Widget Ejecutivo
             'top_operarios': lista_top,
             'top_merma': lista_merma,
             'eficiencia_global_estimada': 92.5
@@ -1231,11 +1304,6 @@ def migrar_columnas_faltantes():
 
 
 def corregir_umbrales_nulos():
-    """
-    ALTER TABLE ADD COLUMN (ver migrar_columnas_faltantes) deja NULL en las
-    filas ya existentes, aunque el modelo tenga default=50. Esto normaliza
-    esas filas viejas para que umbral_minimo nunca sea None en la BD real.
-    """
     materiales_sin_umbral = Material.query.filter(Material.umbral_minimo.is_(None)).all()
     for m in materiales_sin_umbral:
         m.umbral_minimo = 50
@@ -1260,3 +1328,5 @@ if __name__ == '__main__':
     print(f"📦  Inventario vinculado: {INVENTARIO_DB_PATH}")
     print("=" * 60)
     app.run(host='0.0.0.0', port=5002, debug=True)
+
+    
