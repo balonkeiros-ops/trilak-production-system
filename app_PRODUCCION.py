@@ -27,9 +27,6 @@ def ahora_colombia():
 app = Flask(__name__, static_folder='build/static', static_url_path='/static')
 app.secret_key = os.environ.get('SECRET_KEY', 'trilak-dev-secret-cambiar-en-render')
 
-# Configuración de sesión: cookie HttpOnly, SameSite=Lax (funciona en el
-# mismo dominio, evita ataques CSRF simples). Con esto la cookie de sesión
-# se manda automáticamente en cada fetch desde el frontend.
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_SECURE'] = os.environ.get('FLASK_ENV') == 'production'
@@ -83,10 +80,6 @@ class Operario(db.Model):
 
 
 class Usuario(db.Model):
-    """
-    Usuarios del sistema con login por usuario + contraseña.
-    Roles: 'admin' | 'gerente' | 'tablet'
-    """
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(50), unique=True, nullable=False)
     password_hash = db.Column(db.String(200), nullable=False)
@@ -276,6 +269,8 @@ class Produccion(db.Model):
     duracion_segundos = db.Column(db.Integer, nullable=True)
     fecha = db.Column(db.DateTime, default=ahora_colombia)
     observaciones = db.Column(db.Text)
+    # NUEVO Fase 4: 'en_progreso' | 'finalizada' | 'cancelada'
+    estado = db.Column(db.String(20), default='finalizada')
 
     operario = db.relationship('Operario', backref='producciones')
     tarea = db.relationship('Tarea', backref='producciones')
@@ -301,7 +296,8 @@ class Produccion(db.Model):
             'hora_fin': self.hora_fin.isoformat() if self.hora_fin else None,
             'duracion_segundos': self.duracion_segundos,
             'fecha': self.fecha.isoformat(),
-            'observaciones': self.observaciones
+            'observaciones': self.observaciones,
+            'estado': self.estado
         }
 
 
@@ -367,11 +363,52 @@ def registrar_auditoria(accion, entidad=None, entidad_id=None, detalle=None,
 
 
 def usuario_actual():
-    """Devuelve el objeto Usuario de la sesión o None."""
     uid = session.get('usuario_id')
     if not uid:
         return None
     return db.session.get(Usuario, uid)
+
+
+def validar_pin_operario(operario_id, pin):
+    """
+    Devuelve (ok, mensaje, operario). Registra auditoría del intento.
+    ok=True solo si el PIN corresponde al operario y el operario está activo.
+    """
+    operario = db.session.get(Operario, operario_id)
+    if not operario:
+        return False, 'Operario no encontrado', None
+    if operario.estado == 'inactivo':
+        registrar_auditoria(
+            accion='pin_intento_fallido',
+            entidad='operario',
+            entidad_id=operario.id,
+            detalle=f'Operario inactivo: {operario.nombre}',
+            exito=False,
+            operario_id=operario.id
+        )
+        return False, 'Operario inactivo', operario
+    pin_reg = PinOperario.query.filter_by(operario_id=operario.id, activo=True).first()
+    if not pin_reg:
+        registrar_auditoria(
+            accion='pin_intento_fallido',
+            entidad='operario',
+            entidad_id=operario.id,
+            detalle=f'Sin PIN asignado: {operario.nombre}',
+            exito=False,
+            operario_id=operario.id
+        )
+        return False, 'Este operario no tiene PIN asignado', operario
+    if not verificar_pin(pin, pin_reg.pin_hash):
+        registrar_auditoria(
+            accion='pin_intento_fallido',
+            entidad='operario',
+            entidad_id=operario.id,
+            detalle=f'PIN incorrecto para: {operario.nombre}',
+            exito=False,
+            operario_id=operario.id
+        )
+        return False, 'PIN incorrecto', operario
+    return True, None, operario
 
 
 # ======================== FUNCIONES DE INVENTARIO ========================
@@ -558,7 +595,6 @@ def crear_usuarios_y_pins_iniciales():
 # ======================== DECORADORES DE AUTH ========================
 
 def login_required(f):
-    """Exige sesión activa. La sesión se crea al hacer POST /api/login."""
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if not session.get('usuario_id'):
@@ -568,10 +604,6 @@ def login_required(f):
 
 
 def rol_requerido(*roles_permitidos):
-    """
-    Exige que el usuario logueado tenga uno de los roles indicados.
-    Uso: @rol_requerido('admin') o @rol_requerido('admin', 'gerente')
-    """
     def decorator(f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
@@ -599,23 +631,13 @@ def login():
     usuario = Usuario.query.filter_by(username=username).first()
 
     if not usuario or not usuario.activo:
-        registrar_auditoria(
-            accion='login_fallido',
-            detalle=f'Usuario no existe o inactivo: {username}',
-            exito=False
-        )
+        registrar_auditoria(accion='login_fallido', detalle=f'Usuario no existe o inactivo: {username}', exito=False)
         return jsonify({'error': 'Usuario o contraseña incorrectos'}), 401
 
     if not check_password_hash(usuario.password_hash, password):
-        registrar_auditoria(
-            accion='login_fallido',
-            detalle=f'Contraseña incorrecta para: {username}',
-            exito=False,
-            usuario_id=usuario.id
-        )
+        registrar_auditoria(accion='login_fallido', detalle=f'Contraseña incorrecta: {username}', exito=False, usuario_id=usuario.id)
         return jsonify({'error': 'Usuario o contraseña incorrectos'}), 401
 
-    # Login exitoso
     session.permanent = True
     session['usuario_id'] = usuario.id
     session['username'] = usuario.username
@@ -632,10 +654,7 @@ def login():
         usuario_id=usuario.id
     )
 
-    return jsonify({
-        'ok': True,
-        'usuario': usuario.to_dict()
-    })
+    return jsonify({'ok': True, 'usuario': usuario.to_dict()})
 
 
 @app.route('/api/logout', methods=['POST'])
@@ -656,8 +675,6 @@ def logout():
 
 @app.route('/api/me', methods=['GET'])
 def me():
-    """Devuelve el usuario logueado actual. El frontend lo usa al arrancar
-    para saber quién es sin tener que re-loguearse."""
     u = usuario_actual()
     if not u:
         return jsonify({'error': 'No autorizado'}), 401
@@ -722,8 +739,6 @@ def get_tipos_balon():
 
 @app.route('/api/inicializar', methods=['POST'])
 def inicializar_bd():
-    """Público: el frontend lo llama al arrancar para asegurar que las
-    tablas existan. No expone datos sensibles."""
     db.create_all()
     inicializar_datos()
     cargar_materiales_sgii()
@@ -769,7 +784,8 @@ def get_metricas_tipo_balon(tipo_id):
         'fecha': r.fecha.isoformat(),
         'operario_nombre': r.operario.nombre if r.operario else None,
         'unidades_buenas': r.unidades_buenas,
-        'unidades_defectuosas': r.unidades_defectuosas
+        'unidades_defectuosas': r.unidades_defectuosas,
+        'estado': r.estado
     } for r in registros]
 
     return jsonify({
@@ -804,7 +820,6 @@ def operarios_route():
     if request.method == 'GET':
         ops = Operario.query.order_by(Operario.nombre).all()
         return jsonify([op.to_dict() for op in ops])
-    # POST solo admin
     if session.get('rol') != 'admin':
         return jsonify({'error': 'Sin permiso para crear operarios'}), 403
     data = request.json
@@ -846,7 +861,8 @@ def analitica_operario(operario_id):
 
     registros = Produccion.query.filter(
         Produccion.operario_id == operario_id,
-        Produccion.fecha >= fecha_filtro
+        Produccion.fecha >= fecha_filtro,
+        Produccion.estado == 'finalizada'
     ).order_by(Produccion.fecha.asc()).all()
 
     if not registros:
@@ -1099,12 +1115,19 @@ def actualizar_estado_pedido(pedido_id):
 
 # ── PRODUCCIÓN ────────────────────────────────────────────────────────────────
 
-@app.route('/api/produccion', methods=['GET', 'POST'])
+@app.route('/api/produccion', methods=['GET'])
 @login_required
 def produccion_route():
-    if request.method == 'GET':
-        return jsonify([r.to_dict() for r in Produccion.query.order_by(Produccion.fecha.desc()).all()])
+    return jsonify([r.to_dict() for r in Produccion.query.order_by(Produccion.fecha.desc()).all()])
 
+
+@app.route('/api/produccion', methods=['POST'])
+@rol_requerido('admin', 'gerente')
+def produccion_crear_directo():
+    """
+    Endpoint heredado para crear registros COMPLETOS directamente (sin PIN).
+    Solo admin/gerente. El flujo normal es /iniciar + /finalizar con PIN.
+    """
     try:
         data = request.json
         operario = Operario.query.get(data.get('operario_id'))
@@ -1127,7 +1150,7 @@ def produccion_route():
             return jsonify({'error': 'Las unidades no pueden ser negativas'}), 400
         total_unidades = unidades_buenas + unidades_defectuosas
         if total_unidades <= 0:
-            return jsonify({'error': 'Debes registrar al menos una unidad (buena o defectuosa)'}), 400
+            return jsonify({'error': 'Debes registrar al menos una unidad'}), 400
 
         hora_inicio = None
         hora_fin = None
@@ -1138,7 +1161,7 @@ def produccion_route():
                 hora_fin = datetime.fromisoformat(data['hora_fin'])
                 duracion_segundos = max(0, int((hora_fin - hora_inicio).total_seconds()))
             except (ValueError, TypeError):
-                return jsonify({'error': 'hora_inicio/hora_fin del cronómetro no son fechas válidas'}), 400
+                return jsonify({'error': 'Fechas inválidas'}), 400
 
         nueva = Produccion(
             operario_id=operario.id,
@@ -1153,15 +1176,226 @@ def produccion_route():
             hora_fin=hora_fin,
             duracion_segundos=duracion_segundos,
             fecha=datetime.fromisoformat(data['fecha']) if data.get('fecha') else ahora_colombia(),
-            observaciones=data.get('observaciones', '')
+            observaciones=data.get('observaciones', ''),
+            estado='finalizada'
         )
         db.session.add(nueva)
         db.session.commit()
+        registrar_auditoria(
+            accion='produccion_creada_directo',
+            entidad='produccion',
+            entidad_id=nueva.id,
+            detalle=f'Registro directo (sin PIN) por {session.get("username")}',
+            usuario_id=session.get('usuario_id'),
+            operario_id=operario.id
+        )
         return jsonify(nueva.to_dict()), 201
 
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/produccion/iniciar', methods=['POST'])
+@login_required
+def produccion_iniciar():
+    """
+    Inicia una tarea de producción. Requiere PIN del operario.
+    Crea el registro en estado 'en_progreso' con hora_inicio del SERVIDOR.
+    Regla: un operario no puede tener más de una tarea en_progreso.
+    """
+    try:
+        data = request.json or {}
+        operario_id = data.get('operario_id')
+        tarea_id = data.get('tarea_id')
+        tipo_balon_id = data.get('tipo_balon_id')
+        pin = data.get('pin')
+
+        if not operario_id or not tarea_id or not tipo_balon_id:
+            return jsonify({'error': 'Faltan datos obligatorios (operario, tarea, tipo balón)'}), 400
+        if not pin:
+            return jsonify({'error': 'El PIN es obligatorio'}), 400
+
+        ok, mensaje, operario = validar_pin_operario(int(operario_id), str(pin).strip())
+        if not ok:
+            return jsonify({'error': mensaje}), 401
+
+        tarea = db.session.get(Tarea, int(tarea_id))
+        tipo_balon = db.session.get(TipoBalon, int(tipo_balon_id))
+        if not tarea:
+            return jsonify({'error': 'Tarea no encontrada'}), 400
+        if not tipo_balon:
+            return jsonify({'error': 'Tipo de balón no encontrado'}), 400
+
+        existente = Produccion.query.filter_by(
+            operario_id=operario.id, estado='en_progreso'
+        ).first()
+        if existente:
+            return jsonify({
+                'error': 'Este operario ya tiene una tarea en curso. Debe finalizarla antes de iniciar otra.',
+                'tarea_en_curso': existente.to_dict()
+            }), 409
+
+        pedido_id = data.get('pedido_id') or None
+        if pedido_id:
+            pedido_id = int(pedido_id)
+
+        ahora = ahora_colombia()
+        nueva = Produccion(
+            operario_id=operario.id,
+            tarea_id=tarea.id,
+            tipo_balon_id=tipo_balon.id,
+            complejidad_estilo=data.get('complejidad_estilo', '32 cascos'),
+            pedido_id=pedido_id,
+            cantidad=0,
+            unidades_buenas=0,
+            unidades_defectuosas=0,
+            hora_inicio=ahora,
+            hora_fin=None,
+            duracion_segundos=None,
+            fecha=ahora,
+            observaciones=data.get('observaciones', ''),
+            estado='en_progreso'
+        )
+        db.session.add(nueva)
+        db.session.commit()
+
+        registrar_auditoria(
+            accion='produccion_iniciada',
+            entidad='produccion',
+            entidad_id=nueva.id,
+            detalle=f'{operario.nombre} → {tarea.nombre}',
+            exito=True,
+            usuario_id=session.get('usuario_id'),
+            operario_id=operario.id
+        )
+
+        return jsonify(nueva.to_dict()), 201
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/produccion/<int:produccion_id>/finalizar', methods=['PATCH'])
+@login_required
+def produccion_finalizar(produccion_id):
+    """
+    Finaliza una tarea en_progreso. Requiere PIN del mismo operario.
+    El servidor calcula la duración (hora_fin - hora_inicio).
+    """
+    try:
+        registro = db.session.get(Produccion, produccion_id)
+        if not registro:
+            return jsonify({'error': 'Registro no encontrado'}), 404
+        if registro.estado != 'en_progreso':
+            return jsonify({'error': f'El registro no está en progreso (estado actual: {registro.estado})'}), 400
+
+        data = request.json or {}
+        pin = data.get('pin')
+        if not pin:
+            return jsonify({'error': 'El PIN es obligatorio'}), 400
+
+        ok, mensaje, operario = validar_pin_operario(registro.operario_id, str(pin).strip())
+        if not ok:
+            return jsonify({'error': mensaje}), 401
+
+        try:
+            unidades_buenas = float(data.get('unidades_buenas', 0) or 0)
+            unidades_defectuosas = float(data.get('unidades_defectuosas', 0) or 0)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'Cantidades inválidas'}), 400
+
+        if unidades_buenas < 0 or unidades_defectuosas < 0:
+            return jsonify({'error': 'Las unidades no pueden ser negativas'}), 400
+        total = unidades_buenas + unidades_defectuosas
+        if total <= 0:
+            return jsonify({'error': 'Debes registrar al menos una unidad'}), 400
+
+        ahora = ahora_colombia()
+        registro.hora_fin = ahora
+        registro.cantidad = total
+        registro.unidades_buenas = unidades_buenas
+        registro.unidades_defectuosas = unidades_defectuosas
+        if registro.hora_inicio:
+            registro.duracion_segundos = max(0, int((ahora - registro.hora_inicio).total_seconds()))
+        if data.get('observaciones'):
+            registro.observaciones = data['observaciones']
+        registro.estado = 'finalizada'
+
+        db.session.commit()
+
+        registrar_auditoria(
+            accion='produccion_finalizada',
+            entidad='produccion',
+            entidad_id=registro.id,
+            detalle=f'{operario.nombre} → {total} und ({registro.duracion_segundos}s)',
+            exito=True,
+            usuario_id=session.get('usuario_id'),
+            operario_id=operario.id
+        )
+
+        return jsonify(registro.to_dict())
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/produccion/<int:produccion_id>/cancelar', methods=['PATCH'])
+@login_required
+def produccion_cancelar(produccion_id):
+    """
+    Cancela un registro en_progreso (abandonado). Requiere PIN del operario.
+    """
+    try:
+        registro = db.session.get(Produccion, produccion_id)
+        if not registro:
+            return jsonify({'error': 'Registro no encontrado'}), 404
+        if registro.estado != 'en_progreso':
+            return jsonify({'error': f'El registro no está en progreso (estado actual: {registro.estado})'}), 400
+
+        data = request.json or {}
+        pin = data.get('pin')
+        if not pin:
+            return jsonify({'error': 'El PIN es obligatorio'}), 400
+
+        ok, mensaje, operario = validar_pin_operario(registro.operario_id, str(pin).strip())
+        if not ok:
+            return jsonify({'error': mensaje}), 401
+
+        ahora = ahora_colombia()
+        registro.hora_fin = ahora
+        if registro.hora_inicio:
+            registro.duracion_segundos = max(0, int((ahora - registro.hora_inicio).total_seconds()))
+        registro.estado = 'cancelada'
+        registro.observaciones = (registro.observaciones or '') + f' [CANCELADA: {data.get("motivo", "sin motivo")}]'
+
+        db.session.commit()
+
+        registrar_auditoria(
+            accion='produccion_cancelada',
+            entidad='produccion',
+            entidad_id=registro.id,
+            detalle=f'{operario.nombre} canceló la tarea: {data.get("motivo", "sin motivo")}',
+            exito=True,
+            usuario_id=session.get('usuario_id'),
+            operario_id=operario.id
+        )
+
+        return jsonify(registro.to_dict())
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/produccion/en-progreso', methods=['GET'])
+@login_required
+def produccion_en_progreso():
+    """Lista todas las tareas en progreso (para restaurar cronómetros al recargar)."""
+    registros = Produccion.query.filter_by(estado='en_progreso').order_by(Produccion.hora_inicio.asc()).all()
+    return jsonify([r.to_dict() for r in registros])
 
 
 @app.route('/api/produccion/por-operario/<int:operario_id>', methods=['GET'])
@@ -1231,30 +1465,30 @@ def reporte_operario(operario_id):
 @app.route('/api/dashboard', methods=['GET'])
 @login_required
 def dashboard():
-    total_buenas = db.session.query(db.func.coalesce(db.func.sum(Produccion.unidades_buenas), 0)).scalar()
-    total_defectuosas = db.session.query(db.func.coalesce(db.func.sum(Produccion.unidades_defectuosas), 0)).scalar()
+    total_buenas = db.session.query(db.func.coalesce(db.func.sum(Produccion.unidades_buenas), 0)).filter(Produccion.estado == 'finalizada').scalar()
+    total_defectuosas = db.session.query(db.func.coalesce(db.func.sum(Produccion.unidades_defectuosas), 0)).filter(Produccion.estado == 'finalizada').scalar()
     total_producido = total_buenas + total_defectuosas
     calidad_real = round((total_buenas / total_producido) * 100, 1) if total_producido > 0 else None
 
     top_operarios = db.session.query(
         Produccion.operario_id,
         db.func.sum(Produccion.unidades_buenas + Produccion.unidades_defectuosas).label('total_unidades')
-    ).group_by(Produccion.operario_id).order_by(db.text('total_unidades DESC')).limit(5).all()
+    ).filter(Produccion.estado == 'finalizada').group_by(Produccion.operario_id).order_by(db.text('total_unidades DESC')).limit(5).all()
 
     lista_top = []
     for op_id, total in top_operarios:
-        op = Operario.query.get(op_id)
+        op = db.session.get(Operario, op_id)
         if op:
             lista_top.append({'nombre': op.nombre, 'total_unidades': total})
 
     top_merma = db.session.query(
         Produccion.operario_id,
         db.func.sum(Produccion.unidades_defectuosas).label('total_defectos')
-    ).group_by(Produccion.operario_id).order_by(db.text('total_defectos DESC')).limit(3).all()
+    ).filter(Produccion.estado == 'finalizada').group_by(Produccion.operario_id).order_by(db.text('total_defectos DESC')).limit(3).all()
 
     lista_merma = []
     for op_id, defectos in top_merma:
-        op = Operario.query.get(op_id)
+        op = db.session.get(Operario, op_id)
         if op:
             lista_merma.append({'nombre': op.nombre, 'total_defectos': defectos})
 
@@ -1268,7 +1502,7 @@ def dashboard():
             'operarios_disponibles': Operario.query.filter_by(estado='disponible').count(),
             'total_materiales': Material.query.count(),
             'total_tipos_balon': TipoBalon.query.count(),
-            'total_registros_produccion': Produccion.query.count(),
+            'total_registros_produccion': Produccion.query.filter_by(estado='finalizada').count(),
             'produccion_promedio': 6975,
             'utilizacion': 99.6,
             'calidad': calidad_real,
@@ -1312,10 +1546,24 @@ def corregir_umbrales_nulos():
         print(f"[MIGRACION] {len(materiales_sin_umbral)} materiales con umbral_minimo corregido a 50")
 
 
+def corregir_estado_produccion_nulo():
+    """
+    Registros viejos (antes de Fase 4) no tienen estado. Los marcamos como
+    'finalizada' porque ya tenían hora_fin y unidades.
+    """
+    sin_estado = Produccion.query.filter(Produccion.estado.is_(None)).all()
+    for r in sin_estado:
+        r.estado = 'finalizada'
+    if sin_estado:
+        db.session.commit()
+        print(f"[MIGRACION] {len(sin_estado)} registros de producción marcados como 'finalizada'")
+
+
 with app.app_context():
     db.create_all()
     migrar_columnas_faltantes()
     corregir_umbrales_nulos()
+    corregir_estado_produccion_nulo()
     inicializar_datos()
     cargar_materiales_sgii()
     crear_usuarios_y_pins_iniciales()
@@ -1328,5 +1576,3 @@ if __name__ == '__main__':
     print(f"📦  Inventario vinculado: {INVENTARIO_DB_PATH}")
     print("=" * 60)
     app.run(host='0.0.0.0', port=5002, debug=True)
-
-    
