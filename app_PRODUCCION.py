@@ -11,6 +11,8 @@ import xlsxwriter
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
 from dotenv import load_dotenv
+from werkzeug.security import generate_password_hash, check_password_hash
+from functools import wraps
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -78,14 +80,79 @@ class TipoBalon(db.Model):
 class Operario(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     nombre = db.Column(db.String(100), nullable=False, unique=True)
+    cedula = db.Column(db.String(20), unique=True)
     estado = db.Column(db.String(20), default='disponible')
 
     def to_dict(self):
         return {
             'id': self.id,
             'nombre': self.nombre,
+            'cedula': self.cedula,
             'estado': self.estado
         }
+
+
+class Usuario(db.Model):
+    """
+    Usuarios del sistema con login por usuario + contraseña.
+    Roles: 'admin' | 'gerente' | 'tablet'
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(50), unique=True, nullable=False)
+    password_hash = db.Column(db.String(200), nullable=False)
+    rol = db.Column(db.String(20), nullable=False)
+    activo = db.Column(db.Boolean, default=True)
+    creado_en = db.Column(db.DateTime, default=ahora_colombia)
+    ultimo_login = db.Column(db.DateTime)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'username': self.username,
+            'rol': self.rol,
+            'activo': self.activo,
+            'creado_en': self.creado_en.isoformat() if self.creado_en else None,
+            'ultimo_login': self.ultimo_login.isoformat() if self.ultimo_login else None
+        }
+
+
+class PinOperario(db.Model):
+    """
+    PIN de 4 dígitos que firma el inicio/fin de tareas de producción.
+    Se calcula desde los últimos 4 dígitos de la cédula del operario.
+    El PIN se guarda siempre hasheado; nunca en claro en la base de datos.
+    """
+    __tablename__ = 'pin_operario'
+    id = db.Column(db.Integer, primary_key=True)
+    operario_id = db.Column(db.Integer, db.ForeignKey('operario.id'),
+                            unique=True, nullable=False)
+    pin_hash = db.Column(db.String(200), nullable=False)
+    origen = db.Column(db.String(30), default='cedula_ultimos4')
+    activo = db.Column(db.Boolean, default=True)
+    actualizado_en = db.Column(db.DateTime, default=ahora_colombia)
+    operario = db.relationship('Operario')
+
+
+class Auditoria(db.Model):
+    """
+    Registro de acciones sensibles: logins, validaciones de PIN (éxito y
+    fallo), creación/edición/eliminación de entidades críticas.
+    """
+    __tablename__ = 'auditoria'
+    id = db.Column(db.Integer, primary_key=True)
+    usuario_id = db.Column(db.Integer, db.ForeignKey('usuario.id'), nullable=True)
+    operario_id = db.Column(db.Integer, db.ForeignKey('operario.id'), nullable=True)
+    accion = db.Column(db.String(80), nullable=False)
+    entidad = db.Column(db.String(40))
+    entidad_id = db.Column(db.Integer)
+    detalle = db.Column(db.Text)
+    exito = db.Column(db.Boolean, default=True)
+    ip_origen = db.Column(db.String(50))
+    user_agent = db.Column(db.String(200))
+    fecha = db.Column(db.DateTime, default=ahora_colombia, index=True)
+
+    usuario = db.relationship('Usuario')
+    operario = db.relationship('Operario')
 
 
 class Material(db.Model):
@@ -268,6 +335,68 @@ def generar_numero_pedido():
     return f'{prefijo}{correlativo}'
 
 
+# ======================== UTILIDADES DE AUTH ========================
+
+def calcular_pin_desde_cedula(cedula):
+    """
+    Devuelve los últimos 4 dígitos de la cédula como STRING.
+    Mantiene ceros iniciales ('0243' no se convierte en 243).
+    Devuelve None si la cédula no tiene al menos 4 dígitos.
+    """
+    if not cedula:
+        return None
+    solo_digitos = ''.join(c for c in str(cedula) if c.isdigit())
+    if len(solo_digitos) < 4:
+        return None
+    return solo_digitos[-4:]
+
+
+def hashear_pin(pin):
+    """Hashea un PIN. Se guarda el hash, nunca el PIN en claro."""
+    return generate_password_hash(str(pin))
+
+
+def verificar_pin(pin, pin_hash):
+    """Verifica un PIN contra su hash. Devuelve True/False."""
+    try:
+        return check_password_hash(pin_hash, str(pin))
+    except Exception:
+        return False
+
+
+def registrar_auditoria(accion, entidad=None, entidad_id=None, detalle=None,
+                        exito=True, usuario_id=None, operario_id=None):
+    """
+    Helper para insertar filas en la tabla de auditoría.
+    Captura IP y User-Agent del request actual si hay uno activo.
+    """
+    try:
+        from flask import request, has_request_context
+        ip = None
+        ua = None
+        if has_request_context():
+            ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+            if ip and ',' in ip:
+                ip = ip.split(',')[0].strip()
+            ua = request.headers.get('User-Agent', '')[:200]
+        db.session.add(Auditoria(
+            usuario_id=usuario_id,
+            operario_id=operario_id,
+            accion=accion,
+            entidad=entidad,
+            entidad_id=entidad_id,
+            detalle=detalle,
+            exito=exito,
+            ip_origen=ip,
+            user_agent=ua
+        ))
+        db.session.commit()
+    except Exception as e:
+        # La auditoría nunca debe romper una operación exitosa del negocio.
+        db.session.rollback()
+        print(f"[AUDITORIA] No se pudo registrar {accion}: {e}")
+
+
 # ======================== FUNCIONES DE INVENTARIO ========================
 
 def get_stock_inventario(nombre_material: str) -> float:
@@ -385,6 +514,81 @@ def cargar_materiales_sgii():
     db.session.commit()
 
 
+def crear_usuarios_y_pins_iniciales():
+    """
+    Idempotente: se ejecuta en cada arranque, solo crea lo que no existe.
+    No actualiza PINs existentes (para no borrar cambios manuales).
+    """
+    # ── Usuarios del sistema ─────────────────────────────────────────
+    # IMPORTANTE: cambia estas contraseñas después del primer login.
+    # No las dejes así en producción mucho tiempo.
+    usuarios_iniciales = [
+        ('aldo',   'Trilak2026*Aldo',   'admin'),
+        ('miguel', 'Trilak2026*Miguel', 'gerente'),
+        ('clara',  'Trilak2026*Clara',  'gerente'),
+        ('planta', 'Trilak2026*Planta', 'tablet'),
+    ]
+    for username, password, rol in usuarios_iniciales:
+        if not Usuario.query.filter_by(username=username).first():
+            db.session.add(Usuario(
+                username=username,
+                password_hash=generate_password_hash(password),
+                rol=rol
+            ))
+            print(f"[INIT] Usuario creado: {username} ({rol})")
+    db.session.commit()
+
+    # ── Cédulas de los 13 operarios activos ──────────────────────────
+    operarios_cedulas = [
+        ('YEFERSON CAMILO ARDILA VIVIESCAS',     '1025141964'),
+        ('ANYI JAIDYD AMAYA AMAYA',              '1032380243'),
+        ('RUTH SENAIDA GARZON BEJARANO',         '39812803'),
+        ('ANGELICA MARIA MENDOZA CASTAÑEDA',     '52120780'),
+        ('LUZ ZAIDA VARGAS PAEZ',                '52952564'),
+        ('MARTHA STELLA MOLINA MOSQUERA',        '65588240'),
+        ('EDILSON LUGO GALLO',                   '79877086'),
+        ('JHON JAMES PAEZ ROJAS',                '80857852'),
+        ('YERLI PAOLA MONROY HERRERA',           '1033727613'),
+        ('SONIA CRISTINA SUAREZ HERNANDEZ',      '52343183'),
+        ('JAZMIN QUIROGA',                       '1023910870'),
+        ('NANCY PAEZ ROJAS',                     '52232834'),
+        ('CAMILO CASTRO',                        '79662120'),
+    ]
+
+    for nombre, cedula in operarios_cedulas:
+        op = Operario.query.filter_by(nombre=nombre).first()
+        if not op:
+            # No existía, lo creamos (por si inicializar_datos aún no corrió)
+            op = Operario(nombre=nombre, cedula=cedula, estado='disponible')
+            db.session.add(op)
+            db.session.flush()
+            print(f"[INIT] Operario creado: {nombre}")
+        elif not op.cedula:
+            op.cedula = cedula
+
+        # Generar PIN si no existe
+        if not PinOperario.query.filter_by(operario_id=op.id).first():
+            pin = calcular_pin_desde_cedula(cedula)
+            if pin:
+                db.session.add(PinOperario(
+                    operario_id=op.id,
+                    pin_hash=hashear_pin(pin),
+                    origen='cedula_ultimos4'
+                ))
+                print(f"[INIT] PIN generado para {nombre}")
+
+    # ── Marcar inactivos a quienes ya no trabajan ────────────────────
+    for nombre in ['MICHAEL ANDRES GUZMAN ROBLES',
+                   'TATIANA HERNANDEZ OSPINA',
+                   'OTRO OPERARIO']:
+        op = Operario.query.filter_by(nombre=nombre).first()
+        if op and op.estado != 'inactivo':
+            op.estado = 'inactivo'
+            print(f"[INIT] Marcado inactivo: {nombre}")
+
+    db.session.commit()
+
+
 @app.route('/api/login', methods=['POST'])
 def login():
     data = request.json
@@ -401,7 +605,6 @@ def logout():
 
 
 def login_required(f):
-    from functools import wraps
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if not session.get('logged_in'):
@@ -1047,6 +1250,7 @@ with app.app_context():
     corregir_umbrales_nulos()
     inicializar_datos()
     cargar_materiales_sgii()
+    crear_usuarios_y_pins_iniciales()
 
 
 if __name__ == '__main__':
