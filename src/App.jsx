@@ -796,6 +796,8 @@ export default function App() {
       } catch (e) { alert('❌ Error: ' + e.message); }
     };
 
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        
     const tiempoPromedioPorOperario = useMemo(() => {
       const acumulado = {};
       produccion.forEach(p => {
